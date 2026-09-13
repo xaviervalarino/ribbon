@@ -1,7 +1,6 @@
 import Foundation
 import ApplicationServices
 import CoreGraphics
-import RibbonCore
 
 public final class AXElement {
     public let rawElement: AXUIElement

@@ -1,8 +1,6 @@
 import Foundation
 import AppKit
 import ApplicationServices
-import RibbonCore
-import RibbonAccessibility
 
 public final class WindowManager: AXEventObserverDelegate {
     public var ribbon = Ribbon()

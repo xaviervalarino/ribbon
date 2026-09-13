@@ -1,7 +1,6 @@
 import Foundation
 import AppKit
 import ApplicationServices
-import RibbonCore
 
 public protocol AXEventObserverDelegate: AnyObject {
     func windowCreated(element: AXElement, pid: pid_t)
@@ -70,6 +69,8 @@ public final class AXEventObserver {
         let callback: AXObserverCallback = { _, element, notification, refcon in
             guard let refcon = refcon else { return }
             let this = Unmanaged<AXEventObserver>.fromOpaque(refcon).takeUnretainedValue()
+            var pid: pid_t = 0
+            AXUIElementGetPid(element, &pid)
             let axElem = AXElement(element)
             let notifString = notification as String
 
