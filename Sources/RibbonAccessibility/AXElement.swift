@@ -2,6 +2,9 @@ import Foundation
 import ApplicationServices
 import CoreGraphics
 
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: inout CGWindowID) -> AXError
+
 public final class AXElement {
     public let rawElement: AXUIElement
 
@@ -10,7 +13,9 @@ public final class AXElement {
     }
 
     public static func application(pid: pid_t) -> AXElement {
-        return AXElement(AXUIElementCreateApplication(pid))
+        let app = AXUIElementCreateApplication(pid)
+        _ = AXUIElementSetMessagingTimeout(app, 1.0)
+        return AXElement(app)
     }
 
     public static func systemWide() -> AXElement {
@@ -18,6 +23,13 @@ public final class AXElement {
     }
 
     // MARK: - Attributes
+
+    public var windowID: CGWindowID? {
+        var id: CGWindowID = 0
+        let error = _AXUIElementGetWindow(rawElement, &id)
+        guard error == .success, id != 0 else { return nil }
+        return id
+    }
 
     public var title: String {
         var value: AnyObject?
@@ -96,11 +108,45 @@ public final class AXElement {
         }
     }
 
+    public var enhancedUserInterface: Bool {
+        get {
+            var value: AnyObject?
+            let error = AXUIElementCopyAttributeValue(rawElement, "AXEnhancedUserInterface" as CFString, &value)
+            guard error == .success, let boolVal = value as? Bool else { return false }
+            return boolVal
+        }
+        set {
+            let cfBool: CFBoolean = newValue ? kCFBooleanTrue : kCFBooleanFalse
+            AXUIElementSetAttributeValue(rawElement, "AXEnhancedUserInterface" as CFString, cfBool)
+        }
+    }
+
+    public var isMinimized: Bool {
+        var value: AnyObject?
+        let error = AXUIElementCopyAttributeValue(rawElement, kAXMinimizedAttribute as CFString, &value)
+        guard error == .success, let boolVal = value as? Bool else { return false }
+        return boolVal
+    }
+
+    public var isFullscreen: Bool {
+        var value: AnyObject?
+        let error = AXUIElementCopyAttributeValue(rawElement, "AXFullScreen" as CFString, &value)
+        guard error == .success, let boolVal = value as? Bool else { return false }
+        return boolVal
+    }
+
     public var windows: [AXElement] {
         var value: AnyObject?
         let error = AXUIElementCopyAttributeValue(rawElement, kAXWindowsAttribute as CFString, &value)
         guard error == .success, let array = value as? [AXUIElement] else { return [] }
         return array.map { AXElement($0) }
+    }
+
+    public var focusedWindow: AXElement? {
+        var value: AnyObject?
+        let error = AXUIElementCopyAttributeValue(rawElement, kAXFocusedWindowAttribute as CFString, &value)
+        guard error == .success, let value = value, CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return AXElement(value as! AXUIElement)
     }
 
     // MARK: - Actions

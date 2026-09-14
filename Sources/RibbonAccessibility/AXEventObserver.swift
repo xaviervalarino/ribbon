@@ -2,15 +2,31 @@ import Foundation
 import AppKit
 import ApplicationServices
 
+public enum AppEventKind {
+    case hidden
+    case unhidden
+    case spaceChanged
+}
+
 public protocol AXEventObserverDelegate: AnyObject {
     func windowCreated(element: AXElement, pid: pid_t)
     func windowDestroyed(element: AXElement, pid: pid_t)
     func windowFocused(element: AXElement, pid: pid_t)
+    func applicationTerminated(pid: pid_t)
+    func windowMinimized(element: AXElement, pid: pid_t)
+    func windowDeminiaturized(element: AXElement, pid: pid_t)
+    func applicationActivated(pid: pid_t)
+    func applicationEventOccurred(kind: AppEventKind, pid: pid_t?)
 }
 
 public final class AXEventObserver {
     public weak var delegate: AXEventObserverDelegate?
+    /// Owner-supplied admission policy; return false to skip observing an app.
+    public var shouldObserve: ((NSRunningApplication) -> Bool)?
     private var observers: [pid_t: AXObserver] = [:]
+    private var pendingDestroyRegistrations: [pid_t: [AXElement]] = [:]
+    private var pendingRetryPids: Set<pid_t> = []
+    private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0]
 
     public init() {}
 
@@ -28,6 +44,38 @@ public final class AXEventObserver {
             self,
             selector: #selector(handleAppTerminated(_:)),
             name: NSWorkspace.didTerminateApplicationNotification,
+            object: nil
+        )
+
+        // Watch for activated applications
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleAppActivated(_:)),
+            name: NSWorkspace.didActivateApplicationNotification,
+            object: nil
+        )
+
+        // Watch for hidden applications
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleAppHidden(_:)),
+            name: NSWorkspace.didHideApplicationNotification,
+            object: nil
+        )
+
+        // Watch for unhidden applications
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleAppUnhidden(_:)),
+            name: NSWorkspace.didUnhideApplicationNotification,
+            object: nil
+        )
+
+        // Watch for active Space changes
+        NSWorkspace.shared.notificationCenter.addObserver(
+            self,
+            selector: #selector(handleActiveSpaceChanged(_:)),
+            name: NSWorkspace.activeSpaceDidChangeNotification,
             object: nil
         )
 
@@ -59,11 +107,43 @@ public final class AXEventObserver {
 
     @objc private func handleAppTerminated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-        removeObserver(pid: app.processIdentifier)
+        let pid = app.processIdentifier
+        pendingDestroyRegistrations.removeValue(forKey: pid)
+        removeObserver(pid: pid)
+        delegate?.applicationTerminated(pid: pid)
+    }
+
+    @objc private func handleAppActivated(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        delegate?.applicationActivated(pid: app.processIdentifier)
+    }
+
+    @objc private func handleAppHidden(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        delegate?.applicationEventOccurred(kind: .hidden, pid: app.processIdentifier)
+    }
+
+    @objc private func handleAppUnhidden(_ notification: Notification) {
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        delegate?.applicationEventOccurred(kind: .unhidden, pid: app.processIdentifier)
+    }
+
+    @objc private func handleActiveSpaceChanged(_ notification: Notification) {
+        delegate?.applicationEventOccurred(kind: .spaceChanged, pid: nil)
     }
 
     public func observeApplication(pid: pid_t) {
+        observeApplication(pid: pid, attempt: 0)
+    }
+
+    private func observeApplication(pid: pid_t, attempt: Int) {
         guard observers[pid] == nil else { return }
+
+        if let shouldObserve = shouldObserve,
+           let app = NSRunningApplication(processIdentifier: pid),
+           !shouldObserve(app) {
+            return
+        }
 
         var observer: AXObserver?
         let callback: AXObserverCallback = { _, element, notification, refcon in
@@ -82,6 +162,10 @@ public final class AXEventObserver {
                     this.delegate?.windowDestroyed(element: axElem, pid: pid)
                 case kAXFocusedWindowChangedNotification as String:
                     this.delegate?.windowFocused(element: axElem, pid: pid)
+                case kAXWindowMiniaturizedNotification as String:
+                    this.delegate?.windowMinimized(element: axElem, pid: pid)
+                case kAXWindowDeminiaturizedNotification as String:
+                    this.delegate?.windowDeminiaturized(element: axElem, pid: pid)
                 default:
                     break
                 }
@@ -90,13 +174,25 @@ public final class AXEventObserver {
 
         let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         let error = AXObserverCreate(pid, callback, &observer)
-        guard error == .success, let obs = observer else { return }
+        guard error == .success, let obs = observer else {
+            if attempt < Self.retryDelays.count {
+                guard !pendingRetryPids.contains(pid) else { return }
+                pendingRetryPids.insert(pid)
+                DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelays[attempt]) { [weak self] in
+                    self?.pendingRetryPids.remove(pid)
+                    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
+                    self?.observeApplication(pid: pid, attempt: attempt + 1)
+                }
+            }
+            return
+        }
 
-        let appElement = AXUIElementCreateApplication(pid)
+        let appElement = AXElement.application(pid: pid).rawElement
         let notifications = [
             kAXWindowCreatedNotification,
-            kAXUIElementDestroyedNotification,
-            kAXFocusedWindowChangedNotification
+            kAXFocusedWindowChangedNotification,
+            kAXWindowMiniaturizedNotification,
+            kAXWindowDeminiaturizedNotification
         ]
 
         for notif in notifications {
@@ -105,9 +201,26 @@ public final class AXEventObserver {
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         observers[pid] = obs
+
+        if let pending = pendingDestroyRegistrations.removeValue(forKey: pid) {
+            for element in pending {
+                AXObserverAddNotification(obs, element.rawElement, kAXUIElementDestroyedNotification as CFString, refcon)
+            }
+        }
+    }
+
+    public func observeWindowDestroyed(element: AXElement, pid: pid_t) {
+        observeApplication(pid: pid)
+        guard let obs = observers[pid] else {
+            pendingDestroyRegistrations[pid, default: []].append(element)
+            return
+        }
+        let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
+        AXObserverAddNotification(obs, element.rawElement, kAXUIElementDestroyedNotification as CFString, refcon)
     }
 
     public func removeObserver(pid: pid_t) {
+        pendingDestroyRegistrations.removeValue(forKey: pid)
         if let obs = observers.removeValue(forKey: pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         }
