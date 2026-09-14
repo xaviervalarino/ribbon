@@ -67,27 +67,30 @@ Other confirmed defects (full review in git history / session notes): destroy no
 - [x] Replace `build.sh` with a **Makefile**: `cli`, `daemon`, `sign` (ad-hoc default, `CODESIGN_ID` overridable), `clean`; incremental via file targets. *(Flash 3.8, 2026-09-12 — first successful daemon build.)*
 - [x] Fix the callback capture (blocker 1) + remove gratuitous imports (incl. `WindowManager.swift` — flat compile needs none).
 - [x] Add `bin/` to `.gitignore`.
-- [ ] `bundle` target: daemon inside a minimal signed `.app` for Tahoe TCC.
-- [ ] Create/reuse a stable self-signed codesign identity; sign on every build (ad-hoc `-` loses the AX grant per rebuild).
+- [x] `bundle` target: daemon inside a minimal signed `.app` for Tahoe TCC. *(Flash 3.8, 2026-09-13 — `bin/Ribbon.app`, `Resources/Info.plist`, LSUIElement.)*
+- [ ] Create/reuse a stable self-signed codesign identity; sign on every build (ad-hoc `-` loses the AX grant per rebuild). *(Blocked on user: no codesigning identity in keychain — create one in Keychain Access, then `make CODESIGN_ID=<name>`.)*
 
 ### Phase 1: Daemon boots and stays alive
-- [ ] `RunLoop.main.run()` instead of `dispatchMain()` (blocker 2); SIGINT/SIGTERM handlers → `wm.stop()`.
-- [ ] Socket hardening: per-user path (`$TMPDIR/ribbon.sock` or uid suffix), `chmod 0600`, stale-socket/singleton check, `SO_NOSIGPIPE`, non-blocking or dispatch-source per-connection reads, close fd in the source's cancel handler.
-- [ ] CLI: nonzero exit on error, read timeout, document `cycle` alias.
-- [ ] `AXUIElementSetMessagingTimeout(~1s)` on every app element; retry `AXObserverCreate` with backoff for freshly launched apps; skip ignored apps in `observeApplication`.
+- [x] `RunLoop.main.run()` instead of `dispatchMain()` (blocker 2); SIGINT/SIGTERM handlers → `wm.stop()`. *(Flash 3.8, 2026-09-13.)*
+- [x] Socket hardening: per-user path (`$TMPDIR/ribbon.sock`, fallback uid suffix), `chmod 0600`, live-daemon probe + singleton exit, `SO_NOSIGPIPE`, per-connection dispatch-source reads with 5s idle eviction, close fds in cancel handlers, EMFILE accept backoff, 104-byte sun_path guard. *(Flash 3.8 + Pro adversarial review, 2026-09-13.)*
+- [x] CLI: nonzero exit on error, 2s read timeout, per-user socket path, `cycle` alias documented.
+- [x] `AXUIElementSetMessagingTimeout(1s)` on app elements (observer + `AXElement.application`); `AXObserverCreate` retry with 0.5/1/2s backoff; ignored apps skipped in `observeApplication`.
+- Deferred from Pro review (2026-09-13): simultaneous double-launch TOCTOU → flock lockfile (v2 hardening); single-read plaintext protocol assumes unfragmented commands → absorbed by the planned AeroSpace-style length-framed protocol; not runtime-verified yet — daemon needs the AX grant (blocked on codesign identity above).
 
-### Phase 2: Correct window model
-- [ ] CGWindowID identity via `_AXUIElementGetWindow` (blocker 3); key all state on (pid, CGWindowID).
-- [ ] Register `kAXUIElementDestroyed` **per window** (after `kAXWindowCreated`), not on the app element.
-- [ ] App-termination cleanup: delegate callback removes the app's windows from ribbon + tracking.
-- [ ] Liveness GC: periodic sweep validating tracked windows against CGWindowList / AX probes.
-- [ ] Unified admission filter (discovery *and* `windowCreated`): role/subrole + not minimized + not fullscreen + ignore-rules; non-admitted windows are auto-floated (untouched).
-- [ ] Clear `AXEnhancedUserInterface` around every frame-write batch.
-- [ ] Observe `NSWorkspace` didActivate + didHide/didUnhide + `activeSpaceDidChangeNotification` (focus sync, FlashSpace compatibility, Spaces rescan); gate AX ops on `!app.isHidden`.
-- [ ] Unified displayability: hidden or minimized → remove from ribbon; on unhide/unminimize → re-insert right of active column (observe `kAXMinimized` changes).
-- [ ] New-window focus policy: focus + scroll only when the spawning app is frontmost; otherwise insert silently.
-- [ ] Startup: adopt existing windows as columns ordered by x-position.
-- [ ] Split window identity (runtime CGWindowID) from descriptor (bundle id + title pattern) in the model — enables v2 session save/restore.
+### Phase 2: Correct window model — **done 2026-09-14** (Flash 3.8 ×4 dispatches + Pro adversarial review)
+- [x] CGWindowID identity via `_AXUIElementGetWindow` (blocker 3); all state keyed on CGWindowID.
+- [x] `kAXUIElementDestroyed` registered **per window**; pending-registration queue so slow-connecting apps never drop it.
+- [x] App-termination cleanup (`applicationTerminated` delegate + `Ribbon.removeWindows(pid:)`).
+- [x] Liveness GC: 10s CGWindowList sweep; freshly adopted ids get one grace cycle.
+- [x] Unified admission filter `admits()` (role/subrole + !minimized + !fullscreen) in discovery, `windowCreated`, unhide, rescan.
+- [x] `AXEnhancedUserInterface` cleared/restored around per-app frame-write batches.
+- [x] NSWorkspace didActivate (focus sync via `focusedWindow`) + didHide/didUnhide + `activeSpaceDidChange` → Tier-1 rescan/reconcile.
+- [x] Unified displayability: hidden/minimized leave ribbon; return re-inserts right of active via the shared `adopt()` path.
+- [x] New-window focus policy: `activate: app.isActive` — background apps insert silently.
+- [x] Startup adoption ordered by x-position.
+- [x] Identity/descriptor split: runtime CGWindowID + persistent `bundleId`; model fully Codable.
+- Socket path is now deterministic `/tmp/ribbon-<uid>.sock` (Pro finding: $TMPDIR differs across launch contexts).
+- Deferred from Pro review (2026-09-14): rescan does per-app AX IPC on the main thread (~1s worst case per wedged app) — revisit with per-app AX threads; single-read socket framing → planned length-framed protocol; `focusedWindow` casts guarded by CFGetTypeID.
 
 ### Phase 3: Layout, stash, scroll (blocker 4 lives here)
 - [ ] Corner-stash placement (port paneru): configurable per-monitor corner, avoid corners adjacent to another display, persist pre-stash frames, restore all frames on quit/crash.
@@ -107,6 +110,7 @@ Other confirmed defects (full review in git history / session notes): destroy no
 
 ### Phase 5: Integration
 - [ ] Karabiner: replace Hammerspoon calls in `karabiner.edn` with `~/dev/ribbon/bin/ribbon ...`.
+- PaperWM on/off is **manual only** (`~/.config/ribbon/paperwm.disabled` + `hs -c "hs.reload()"`, wired 2026-09-13) — user decision: ribbon must never flip this flag itself.
 - [ ] FlashSpace interop: on-switch hook script → `ribbon` CLI; debounce focus-follow ~150ms after workspace change; verify no frame fights with its PiP corner-parking.
 - [ ] Latency check: <100ms perceived input-to-motion (AX setFrame IPC is the floor).
 
