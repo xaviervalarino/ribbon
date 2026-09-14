@@ -2,11 +2,11 @@ import Foundation
 import CoreGraphics
 
 public struct WindowPlacement: Sendable {
-    public let windowID: Int
+    public let windowID: CGWindowID
     public let frame: CGRect
     public let isHidden: Bool
 
-    public init(windowID: Int, frame: CGRect, isHidden: Bool) {
+    public init(windowID: CGWindowID, frame: CGRect, isHidden: Bool) {
         self.windowID = windowID
         self.frame = frame
         self.isHidden = isHidden

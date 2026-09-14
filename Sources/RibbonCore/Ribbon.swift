@@ -1,6 +1,7 @@
 import Foundation
+import CoreGraphics
 
-public struct Ribbon: Sendable {
+public struct Ribbon: Sendable, Codable {
     public var columns: [ColumnModel]
     public var activeColumnIndex: Int
 
@@ -103,12 +104,14 @@ public struct Ribbon: Sendable {
 
     // MARK: - Window Management
 
-    public mutating func addWindow(_ window: WindowModel, config: Config) {
+    public mutating func addWindow(_ window: WindowModel, config: Config, activate: Bool = true) {
         // Check if window is already tracked
         for (cIdx, col) in columns.enumerated() {
             if let rIdx = col.windows.firstIndex(where: { $0.id == window.id }) {
-                activeColumnIndex = cIdx
-                columns[cIdx].activeRowIndex = rIdx
+                if activate {
+                    activeColumnIndex = cIdx
+                    columns[cIdx].activeRowIndex = rIdx
+                }
                 return
             }
         }
@@ -123,11 +126,13 @@ public struct Ribbon: Sendable {
             // Insert to the right of active column
             let insertIndex = min(activeColumnIndex + 1, columns.count)
             columns.insert(newColumn, at: insertIndex)
-            activeColumnIndex = insertIndex
+            if activate {
+                activeColumnIndex = insertIndex
+            }
         }
     }
 
-    public mutating func removeWindow(id: Int) {
+    public mutating func removeWindow(id: CGWindowID) {
         for (cIdx, var col) in columns.enumerated() {
             if let rIdx = col.windows.firstIndex(where: { $0.id == id }) {
                 col.windows.remove(at: rIdx)
@@ -142,6 +147,13 @@ public struct Ribbon: Sendable {
                 }
                 return
             }
+        }
+    }
+
+    public mutating func removeWindows(pid: pid_t) {
+        let matchingIDs = columns.flatMap { $0.windows }.filter { $0.pid == pid }.map { $0.id }
+        for id in matchingIDs {
+            removeWindow(id: id)
         }
     }
 }

@@ -1,22 +1,32 @@
 import Foundation
+import CoreGraphics
 
-public struct WindowModel: Identifiable, Equatable, Sendable {
-    public let id: Int
+public struct WindowModel: Identifiable, Equatable, Sendable, Codable {
+    public let id: CGWindowID
     public let pid: pid_t
+    public let bundleId: String?
     public var title: String
     public var appName: String
     public var isFloating: Bool
 
-    public init(id: Int, pid: pid_t, title: String, appName: String, isFloating: Bool = false) {
+    public init(
+        id: CGWindowID,
+        pid: pid_t,
+        bundleId: String? = nil,
+        title: String,
+        appName: String,
+        isFloating: Bool = false
+    ) {
         self.id = id
         self.pid = pid
+        self.bundleId = bundleId
         self.title = title
         self.appName = appName
         self.isFloating = isFloating
     }
 }
 
-public struct ColumnModel: Identifiable, Equatable, Sendable {
+public struct ColumnModel: Identifiable, Equatable, Sendable, Codable {
     public let id: UUID
     public var windows: [WindowModel]
     public var widthRatio: Double
