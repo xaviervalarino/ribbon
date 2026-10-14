@@ -283,7 +283,7 @@ public final class WindowManager: AXEventObserverDelegate {
         var discovered: [(win: AXElement, id: CGWindowID, pid: pid_t, appName: String, bundleId: String?, x: CGFloat, frame: CGRect)] = []
 
         for app in NSWorkspace.shared.runningApplications {
-            guard app.activationPolicy == .regular,
+            guard !app.isHidden,
                   let appName = app.localizedName,
                   !config.ignoredApps.contains(appName) else { continue }
 

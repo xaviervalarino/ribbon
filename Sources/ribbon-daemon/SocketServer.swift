@@ -39,19 +39,32 @@ public final class SocketServer {
             throw SocketServerError.pathTooLong
         }
 
-        // Probe for a live daemon before unlinking
-        let probeFD = socket(AF_UNIX, SOCK_STREAM, 0)
-        if probeFD >= 0 {
-            var probeAddr = Self.makeAddress(socketPath)
-            let connectResult = withUnsafePointer(to: &probeAddr) {
-                $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    connect(probeFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+        // Probe for a live daemon before unlinking, retrying briefly if an exiting instance is closing
+        var isAlive = false
+        for attempt in 0..<3 {
+            let probeFD = socket(AF_UNIX, SOCK_STREAM, 0)
+            if probeFD >= 0 {
+                var probeAddr = Self.makeAddress(socketPath)
+                let connectResult = withUnsafePointer(to: &probeAddr) {
+                    $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                        connect(probeFD, $0, socklen_t(MemoryLayout<sockaddr_un>.size))
+                    }
+                }
+                close(probeFD)
+                if connectResult == 0 {
+                    isAlive = true
+                    if attempt < 2 {
+                        usleep(150_000) // 150ms backoff in case old process is in mid-exit
+                        continue
+                    }
+                } else {
+                    isAlive = false
+                    break
                 }
             }
-            close(probeFD)
-            if connectResult == 0 {
-                throw SocketServerError.alreadyRunning
-            }
+        }
+        if isAlive {
+            throw SocketServerError.alreadyRunning
         }
 
         unlink(socketPath)

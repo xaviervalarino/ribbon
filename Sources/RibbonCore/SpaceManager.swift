@@ -47,10 +47,10 @@ public enum SpaceManager {
     }
 
     private static func parseSpaceID(from dict: [String: Any]) -> UInt64? {
-        return (dict["ManagedSpaceID"] as? UInt64)
-            ?? (dict["id64"] as? UInt64)
-            ?? (dict["ManagedSpaceID"] as? Int).map(UInt64.init)
+        return (dict["id64"] as? UInt64)
             ?? (dict["id64"] as? Int).map(UInt64.init)
+            ?? (dict["ManagedSpaceID"] as? UInt64)
+            ?? (dict["ManagedSpaceID"] as? Int).map(UInt64.init)
     }
 
     public static func activeSpaces() -> [UInt64] {
