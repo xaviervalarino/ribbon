@@ -167,7 +167,21 @@ public final class WindowManager: AXEventObserverDelegate {
             && !win.isFullscreen
     }
 
+    private func onScreenWindowIDs() -> Set<CGWindowID>? {
+        guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary] else {
+            return nil
+        }
+        var ids = Set<CGWindowID>()
+        for dict in windowList {
+            if let num = dict[kCGWindowNumber as String] as? NSNumber {
+                ids.insert(num.uint32Value)
+            }
+        }
+        return ids
+    }
+
     private func discoverExistingWindows() {
+        let onScreen = onScreenWindowIDs()
         var discovered: [(win: AXElement, id: CGWindowID, pid: pid_t, appName: String, bundleId: String?, x: CGFloat)] = []
 
         for app in NSWorkspace.shared.runningApplications {
@@ -179,6 +193,7 @@ public final class WindowManager: AXEventObserverDelegate {
             for win in appElem.windows {
                 guard admits(win) else { continue }
                 guard let id = win.windowID else { continue }
+                if let onScreen = onScreen, !onScreen.contains(id) { continue }
 
                 if originalFrames[id] == nil, let frame = win.frame {
                     originalFrames[id] = frame
@@ -354,6 +369,12 @@ public final class WindowManager: AXEventObserverDelegate {
     // MARK: - IPC Command Handling
 
     public func handleCommand(_ command: String) -> String {
+        if spaceChangeWork != nil {
+            spaceChangeWork?.cancel()
+            spaceChangeWork = nil
+            rescanAfterSpaceChange()
+        }
+
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
 
@@ -419,6 +440,13 @@ public final class WindowManager: AXEventObserverDelegate {
         guard admits(element) else { return false }
         guard let id = element.windowID else { return false }
 
+        if let onScreen = onScreenWindowIDs(), !onScreen.contains(id) {
+            let isFrontApp = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
+            if !isFrontApp {
+                return false
+            }
+        }
+
         // Never overwrite an existing entry: on re-adoption (deminiaturize,
         // unhide, space change) the current frame is our own tiled frame,
         // not the user's original.
@@ -482,6 +510,7 @@ public final class WindowManager: AXEventObserverDelegate {
     }
 
     private func rescanAfterSpaceChange() {
+        let onScreen = onScreenWindowIDs()
         // 1. Build the set of currently-visible admitted window ids
         var visibleIDs = Set<CGWindowID>()
         var candidateWindows: [(win: AXElement, id: CGWindowID, pid: pid_t, x: CGFloat)] = []
@@ -496,6 +525,7 @@ public final class WindowManager: AXEventObserverDelegate {
             let appElem = AXElement.application(pid: pid)
             for win in appElem.windows {
                 guard admits(win), let id = win.windowID else { continue }
+                if let onScreen = onScreen, !onScreen.contains(id) { continue }
                 if visibleIDs.insert(id).inserted {
                     let x = win.position?.x ?? 0
                     candidateWindows.append((win: win, id: id, pid: pid, x: x))
@@ -719,8 +749,11 @@ public final class WindowManager: AXEventObserverDelegate {
             scheduleRetile()
         case .unhidden:
             guard let pid = pid else { return }
+            let onScreen = onScreenWindowIDs()
             for win in AXElement.application(pid: pid).windows {
-                adopt(element: win, pid: pid, activate: false)
+                if let id = win.windowID, onScreen?.contains(id) ?? true {
+                    adopt(element: win, pid: pid, activate: false)
+                }
             }
             scheduleRetile()
         case .spaceChanged:
