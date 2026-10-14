@@ -65,6 +65,24 @@ public struct Ribbon: Sendable, Codable {
         activeColumnIndex += 1
     }
 
+    public mutating func swapUp() {
+        guard columns.indices.contains(activeColumnIndex) else { return }
+        var col = columns[activeColumnIndex]
+        guard col.windows.count > 1, col.activeRowIndex > 0, col.activeRowIndex < col.windows.count else { return }
+        col.windows.swapAt(col.activeRowIndex, col.activeRowIndex - 1)
+        col.activeRowIndex -= 1
+        columns[activeColumnIndex] = col
+    }
+
+    public mutating func swapDown() {
+        guard columns.indices.contains(activeColumnIndex) else { return }
+        var col = columns[activeColumnIndex]
+        guard col.windows.count > 1, col.activeRowIndex >= 0, col.activeRowIndex < col.windows.count - 1 else { return }
+        col.windows.swapAt(col.activeRowIndex, col.activeRowIndex + 1)
+        col.activeRowIndex += 1
+        columns[activeColumnIndex] = col
+    }
+
     public mutating func cycleWidth(ratios: [Double]) {
         guard columns.indices.contains(activeColumnIndex) else { return }
         let currentRatio = columns[activeColumnIndex].widthRatio

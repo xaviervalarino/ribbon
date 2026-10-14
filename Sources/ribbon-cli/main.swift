@@ -7,7 +7,7 @@ guard !arguments.isEmpty else {
 
     Usage:
       ribbon focus <left|right|up|down>
-      ribbon swap <left|right>
+      ribbon swap <left|right|up|down>
       ribbon cycle-width (alias: cycle)
       ribbon slurp
       ribbon barf

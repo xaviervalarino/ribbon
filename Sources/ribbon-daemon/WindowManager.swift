@@ -357,6 +357,8 @@ public final class WindowManager: AXEventObserverDelegate {
             switch dir {
             case "left", "h": ribbon.swapLeft()
             case "right", "l": ribbon.swapRight()
+            case "up", "k": ribbon.swapUp()
+            case "down", "j": ribbon.swapDown()
             default: return "error: unknown swap direction"
             }
         case "cycle-width", "cycle":
