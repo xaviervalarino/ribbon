@@ -21,6 +21,7 @@ public final class WindowManager: AXEventObserverDelegate {
     private let observer = AXEventObserver()
     private let socketServer = SocketServer()
     private var trackedWindows: [CGWindowID: AXElement] = [:]
+    private var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
     private var adoptedSinceLastSweep: Set<CGWindowID> = []
     private var gcTimer: DispatchSourceTimer?
     private var retileWork: DispatchWorkItem?
@@ -69,7 +70,7 @@ public final class WindowManager: AXEventObserverDelegate {
         print("[ribbon-daemon] IPC Socket listening on \(socketServer.socketPath)")
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + .seconds(10), repeating: .seconds(10), leeway: .seconds(1))
+        timer.schedule(deadline: .now() + .seconds(2), repeating: .seconds(2), leeway: .milliseconds(500))
         timer.setEventHandler { [weak self] in
             self?.sweepDeadWindows()
         }
@@ -184,6 +185,7 @@ public final class WindowManager: AXEventObserverDelegate {
 
         for entry in discovered {
             trackedWindows[entry.id] = entry.win
+            windowIDsByElement[entry.win.rawElement] = entry.id
             let model = WindowModel(
                 id: entry.id,
                 pid: entry.pid,
@@ -390,6 +392,7 @@ public final class WindowManager: AXEventObserverDelegate {
         }
 
         trackedWindows[id] = element
+        windowIDsByElement[element.rawElement] = id
         let model = WindowModel(
             id: id,
             pid: pid,
@@ -408,7 +411,9 @@ public final class WindowManager: AXEventObserverDelegate {
     // Dead-window paths (destroy, GC sweep, app termination) call
     // forgetOriginalFrame separately.
     private func removeFromRibbon(id: CGWindowID) {
-        trackedWindows.removeValue(forKey: id)
+        if let elem = trackedWindows.removeValue(forKey: id) {
+            windowIDsByElement.removeValue(forKey: elem.rawElement)
+        }
         lastAppliedFrames.removeValue(forKey: id)
         ribbon.removeWindow(id: id)
     }
@@ -530,7 +535,10 @@ public final class WindowManager: AXEventObserverDelegate {
     }
 
     public func windowDestroyed(element: AXElement, pid: pid_t) {
-        guard let id = element.windowID else { return }
+        guard let id = element.windowID
+            ?? windowIDsByElement[element.rawElement]
+            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
+        else { return }
         removeFromRibbon(id: id)
         forgetOriginalFrame(id: id)
         scheduleRetile()
