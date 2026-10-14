@@ -25,6 +25,7 @@ public final class WindowManager: AXEventObserverDelegate {
     private var adoptedSinceLastSweep: Set<CGWindowID> = []
     private var gcTimer: DispatchSourceTimer?
     private var retileWork: DispatchWorkItem?
+    private var resizeDebounceWork: DispatchWorkItem?
     private var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     private var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
     private var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
@@ -103,6 +104,8 @@ public final class WindowManager: AXEventObserverDelegate {
         gcTimer = nil
         retileWork?.cancel()
         retileWork = nil
+        resizeDebounceWork?.cancel()
+        resizeDebounceWork = nil
         observer.stop()
 
         var windowPID: [CGWindowID: pid_t] = [:]
@@ -586,10 +589,17 @@ public final class WindowManager: AXEventObserverDelegate {
         guard canvasW > 0 else { return }
 
         let ratio = max(0.15, min(1.0, Double(newSize.width) / Double(canvasW)))
-        if ribbon.setWidthRatio(ratio, forWindowID: id) {
-            lastAppliedFrames.removeValue(forKey: id)
-            scheduleRetile()
+        resizeDebounceWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.resizeDebounceWork = nil
+            if self.ribbon.setWidthRatio(ratio, forWindowID: id) {
+                self.lastAppliedFrames.removeValue(forKey: id)
+                self.scheduleRetile()
+            }
         }
+        resizeDebounceWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
     }
 
     public func windowMoved(element: AXElement, pid: pid_t) {
@@ -608,9 +618,9 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
-        // Snap user-moved window back to its assigned ribbon column
+        // Manual move: mark dirty in diff cache; keyboard retiles snap it back,
+        // but avoid fighting the mouse cursor mid-drag.
         lastAppliedFrames.removeValue(forKey: id)
-        scheduleRetile()
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
