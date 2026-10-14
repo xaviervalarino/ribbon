@@ -104,7 +104,7 @@ Other confirmed defects (full review in git history / session notes): destroy no
 
 ### Phase 4: Stacking & column ops
 - [x] Fix `barf()` (LIFO eject right, reclamp `activeRowIndex`) and `slurp()` (point `activeRowIndex` at slurped window), plus position-size-position frame application.
-- [ ] Stack height: even split for MVP; clamp so stacks never overflow the screen (min-height floor currently marches past the bottom edge).
+- [x] Stack height: even split for MVP; clamp so stacks never overflow the screen (min-height floor currently marches past the bottom edge).
 - [ ] Adopt manual mouse resizes into the column width ratio (observe `kAXResized` from user, via the echo ledger); manual moves snap back on next retile.
 - [x] Test `focus up/down`, `slurp`, `barf`.
 

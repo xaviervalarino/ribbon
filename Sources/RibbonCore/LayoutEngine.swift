@@ -166,15 +166,22 @@ public struct LayoutEngine: Sendable {
             let frame = CGRect(x: x, y: canvasY, width: width, height: canvasH)
             results.append(makePlacement(winID: column.windows[0].id, tiledFrame: frame))
         } else {
-            // Distribute height evenly among stacked windows with inner gap
-            let totalGaps = Double(count - 1) * gap
-            let windowH = max(100.0, (canvasH - totalGaps) / Double(count))
+            // Distribute height evenly among stacked windows with inner gap.
+            // Scale inner gap down if necessary so windows never overflow canvas bottom.
+            let minWindowHeight = 30.0
+            let maxGaps = max(0.0, canvasH - (Double(count) * minWindowHeight))
+            let effectiveGap = count > 1 ? min(gap, maxGaps / Double(count - 1)) : 0.0
+            let totalGaps = Double(count - 1) * effectiveGap
+            let windowH = max(minWindowHeight, (canvasH - totalGaps) / Double(count))
             var currentY = canvasY
+            let bottomLimit = canvasY + canvasH
 
-            for win in column.windows {
-                let frame = CGRect(x: x, y: currentY, width: width, height: windowH)
+            for (idx, win) in column.windows.enumerated() {
+                let available = max(minWindowHeight, bottomLimit - currentY)
+                let h = (idx == count - 1) ? available : min(windowH, available)
+                let frame = CGRect(x: x, y: currentY, width: width, height: h)
                 results.append(makePlacement(winID: win.id, tiledFrame: frame))
-                currentY += windowH + gap
+                currentY += windowH + effectiveGap
             }
         }
 
