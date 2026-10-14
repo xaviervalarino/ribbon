@@ -11,6 +11,8 @@ guard !arguments.isEmpty else {
       ribbon cycle-width (alias: cycle)
       ribbon slurp
       ribbon barf
+      ribbon retile
+      ribbon rescan
       ribbon status
     """)
     exit(0)

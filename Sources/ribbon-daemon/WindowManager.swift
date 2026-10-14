@@ -26,6 +26,7 @@ public final class WindowManager: AXEventObserverDelegate {
     private var gcTimer: DispatchSourceTimer?
     private var retileWork: DispatchWorkItem?
     private var resizeDebounceWork: DispatchWorkItem?
+    private var spaceChangeWork: DispatchWorkItem?
     private var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     private var lastStashedState: [CGWindowID: Bool] = [:]
     private var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
@@ -107,6 +108,8 @@ public final class WindowManager: AXEventObserverDelegate {
         retileWork = nil
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
+        spaceChangeWork?.cancel()
+        spaceChangeWork = nil
         observer.stop()
 
         var windowPID: [CGWindowID: pid_t] = [:]
@@ -381,6 +384,16 @@ public final class WindowManager: AXEventObserverDelegate {
             ribbon.slurp()
         case "barf":
             ribbon.barf()
+        case "retile":
+            retileWork?.cancel()
+            retileWork = nil
+            retile()
+            return "ok"
+        case "rescan":
+            spaceChangeWork?.cancel()
+            spaceChangeWork = nil
+            rescanAfterSpaceChange()
+            return "ok"
         case "status":
             return "columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex)"
         default:
@@ -506,8 +519,26 @@ public final class WindowManager: AXEventObserverDelegate {
             adopt(element: entry.win, pid: entry.pid, activate: false)
         }
 
-        // 4. retile()
-        scheduleRetile()
+        // 4. Sync active column to frontmost window on the new Space
+        if let frontApp = NSWorkspace.shared.frontmostApplication {
+            let frontElem = AXElement.application(pid: frontApp.processIdentifier)
+            if let focusedWin = frontElem.focusedWindow, let focusedID = focusedWin.windowID {
+                for (colIdx, col) in ribbon.columns.enumerated() {
+                    if let rowIdx = col.windows.firstIndex(where: { $0.id == focusedID }) {
+                        ribbon.activeColumnIndex = colIdx
+                        var c = col
+                        c.activeRowIndex = rowIdx
+                        ribbon.columns[colIdx] = c
+                        break
+                    }
+                }
+            }
+        }
+
+        // 5. retile()
+        retileWork?.cancel()
+        retileWork = nil
+        retile()
     }
 
     // MARK: - Liveness GC
@@ -693,7 +724,13 @@ public final class WindowManager: AXEventObserverDelegate {
             }
             scheduleRetile()
         case .spaceChanged:
-            rescanAfterSpaceChange()
+            spaceChangeWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
+                self?.spaceChangeWork = nil
+                self?.rescanAfterSpaceChange()
+            }
+            spaceChangeWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
         }
     }
 
