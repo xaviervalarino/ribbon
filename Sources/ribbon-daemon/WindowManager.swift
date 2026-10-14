@@ -209,8 +209,11 @@ public final class WindowManager: AXEventObserverDelegate {
     // MARK: - Screen Resolution
 
     private func resolveScreen() -> NSScreen? {
+        if NSScreen.screens.count <= 1 {
+            return NSScreen.main ?? NSScreen.screens.first
+        }
         if let activeID = ribbon.activeWindow?.id,
-           let frame = trackedWindows[activeID]?.frame {
+           let frame = lastAppliedFrames[activeID] ?? originalFrames[activeID] ?? trackedWindows[activeID]?.frame {
             let primaryScreenHeight = NSScreen.screens.first?.frame.height ?? 0
             let cocoaY = primaryScreenHeight - (frame.origin.y + frame.height)
             let cocoaFrame = CGRect(x: frame.origin.x, y: cocoaY, width: frame.width, height: frame.height)
