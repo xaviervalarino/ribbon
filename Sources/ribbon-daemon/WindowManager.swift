@@ -195,7 +195,7 @@ public final class WindowManager: AXEventObserverDelegate {
                 appName: entry.appName
             )
             ribbon.addWindow(model, config: config)
-            observer.observeWindowDestroyed(element: entry.win, pid: entry.pid)
+            observer.observeWindow(element: entry.win, pid: entry.pid)
             adoptedSinceLastSweep.insert(entry.id)
         }
 
@@ -403,7 +403,7 @@ public final class WindowManager: AXEventObserverDelegate {
             appName: appName
         )
         ribbon.addWindow(model, config: config, activate: activate)
-        observer.observeWindowDestroyed(element: element, pid: pid)
+        observer.observeWindow(element: element, pid: pid)
         adoptedSinceLastSweep.insert(id)
         return true
     }
@@ -577,6 +577,10 @@ public final class WindowManager: AXEventObserverDelegate {
 
         guard let newSize = element.size,
               let screen = resolveScreen() else { return }
+
+        if let last = lastAppliedFrames[id], abs(last.size.width - newSize.width) < 2.0 {
+            return
+        }
 
         let canvasW = screen.visibleFrame.width - (config.edgeMargin * 2)
         guard canvasW > 0 else { return }

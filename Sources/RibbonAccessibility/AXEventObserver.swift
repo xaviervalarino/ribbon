@@ -26,7 +26,7 @@ public final class AXEventObserver {
     /// Owner-supplied admission policy; return false to skip observing an app.
     public var shouldObserve: ((NSRunningApplication) -> Bool)?
     private var observers: [pid_t: AXObserver] = [:]
-    private var pendingDestroyRegistrations: [pid_t: [AXElement]] = [:]
+    private var pendingWindowRegistrations: [pid_t: [AXElement]] = [:]
     private var pendingRetryPids: Set<pid_t> = []
     private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0]
 
@@ -110,7 +110,7 @@ public final class AXEventObserver {
     @objc private func handleAppTerminated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let pid = app.processIdentifier
-        pendingDestroyRegistrations.removeValue(forKey: pid)
+        pendingWindowRegistrations.removeValue(forKey: pid)
         removeObserver(pid: pid)
         delegate?.applicationTerminated(pid: pid)
     }
@@ -168,9 +168,9 @@ public final class AXEventObserver {
                     this.delegate?.windowMinimized(element: axElem, pid: pid)
                 case kAXWindowDeminiaturizedNotification as String:
                     this.delegate?.windowDeminiaturized(element: axElem, pid: pid)
-                case kAXWindowResizedNotification as String:
+                case kAXWindowResizedNotification as String, kAXResizedNotification as String:
                     this.delegate?.windowResized(element: axElem, pid: pid)
-                case kAXWindowMovedNotification as String:
+                case kAXWindowMovedNotification as String, kAXMovedNotification as String:
                     this.delegate?.windowMoved(element: axElem, pid: pid)
                 default:
                     break
@@ -198,9 +198,7 @@ public final class AXEventObserver {
             kAXWindowCreatedNotification,
             kAXFocusedWindowChangedNotification,
             kAXWindowMiniaturizedNotification,
-            kAXWindowDeminiaturizedNotification,
-            kAXWindowResizedNotification,
-            kAXWindowMovedNotification
+            kAXWindowDeminiaturizedNotification
         ]
 
         for notif in notifications {
@@ -210,25 +208,36 @@ public final class AXEventObserver {
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         observers[pid] = obs
 
-        if let pending = pendingDestroyRegistrations.removeValue(forKey: pid) {
+        if let pending = pendingWindowRegistrations.removeValue(forKey: pid) {
             for element in pending {
-                AXObserverAddNotification(obs, element.rawElement, kAXUIElementDestroyedNotification as CFString, refcon)
+                registerWindowNotifications(obs: obs, element: element.rawElement, refcon: refcon)
             }
         }
     }
 
-    public func observeWindowDestroyed(element: AXElement, pid: pid_t) {
+    private func registerWindowNotifications(obs: AXObserver, element: AXUIElement, refcon: UnsafeMutableRawPointer) {
+        let windowNotifs = [
+            kAXUIElementDestroyedNotification,
+            kAXResizedNotification,
+            kAXMovedNotification
+        ]
+        for notif in windowNotifs {
+            AXObserverAddNotification(obs, element, notif as CFString, refcon)
+        }
+    }
+
+    public func observeWindow(element: AXElement, pid: pid_t) {
         observeApplication(pid: pid)
         guard let obs = observers[pid] else {
-            pendingDestroyRegistrations[pid, default: []].append(element)
+            pendingWindowRegistrations[pid, default: []].append(element)
             return
         }
         let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
-        AXObserverAddNotification(obs, element.rawElement, kAXUIElementDestroyedNotification as CFString, refcon)
+        registerWindowNotifications(obs: obs, element: element.rawElement, refcon: refcon)
     }
 
     public func removeObserver(pid: pid_t) {
-        pendingDestroyRegistrations.removeValue(forKey: pid)
+        pendingWindowRegistrations.removeValue(forKey: pid)
         if let obs = observers.removeValue(forKey: pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         }
