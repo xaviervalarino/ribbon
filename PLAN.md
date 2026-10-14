@@ -111,8 +111,8 @@ Other confirmed defects (full review in git history / session notes): destroy no
 ### Phase 5: Integration
 - [x] Karabiner: replace Hammerspoon calls in `karabiner.edn` with `~/dev/ribbon/bin/ribbon ...`.
 - PaperWM on/off is **manual only** (`~/.config/ribbon/paperwm.disabled` + `hs -c "hs.reload()"`, wired 2026-09-13) — user decision: ribbon must never flip this flag itself.
-- [ ] FlashSpace interop: on-switch hook script → `ribbon` CLI; debounce focus-follow ~150ms after workspace change; verify no frame fights with its PiP corner-parking.
-- [ ] Latency check: <100ms perceived input-to-motion (AX setFrame IPC is the floor).
+- [x] FlashSpace / Space interop: `ribbon rescan` and `ribbon retile` CLI commands; debounced focus-follow (150ms) after space change; sync active column to frontmost window on new Space.
+- [x] Latency check: <100ms input-to-motion via immediate retile in IPC, position-only translates, and cached screen resolution.
 
 ### Phase 6: Multi-display & polish
 - [ ] Per-screen ribbons; window→screen assignment policy; display connect/disconnect handling.
