@@ -3,6 +3,18 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 
+private let displayReconfigurationCallback: CGDisplayReconfigurationCallBack = { _, flags, userInfo in
+    guard let userInfo = userInfo else { return }
+    let wm = Unmanaged<WindowManager>.fromOpaque(userInfo).takeUnretainedValue()
+    if wm.isStopped { return }
+    if flags.contains(.setModeFlag) || flags.contains(.addFlag) || flags.contains(.removeFlag) || flags.contains(.desktopShapeChangedFlag) {
+        DispatchQueue.main.async {
+            guard !wm.isStopped else { return }
+            wm.displayConfigurationChanged()
+        }
+    }
+}
+
 public final class WindowManager: AXEventObserverDelegate {
     public var ribbon = Ribbon()
     public var config = Config.default
@@ -11,6 +23,18 @@ public final class WindowManager: AXEventObserverDelegate {
     private var trackedWindows: [CGWindowID: AXElement] = [:]
     private var adoptedSinceLastSweep: Set<CGWindowID> = []
     private var gcTimer: DispatchSourceTimer?
+    private var retileWork: DispatchWorkItem?
+    private var lastAppliedFrames: [CGWindowID: CGRect] = [:]
+    private var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
+    private var originalFrames: [CGWindowID: CGRect] = [:]
+    fileprivate var isStopped = false
+
+    private var restoreFramesURL: URL {
+        FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".config")
+            .appendingPathComponent("ribbon")
+            .appendingPathComponent("restore-frames.json")
+    }
 
     public init() {
         observer.delegate = self
@@ -23,6 +47,13 @@ public final class WindowManager: AXEventObserverDelegate {
 
     public func start() throws {
         print("[ribbon-daemon] Starting WindowManager...")
+
+        // A leftover restore file means the previous daemon crashed. Load its
+        // entries so windows keep their true pre-daemon frames instead of
+        // adopting the crashed run's tiled frames as "originals".
+        loadPersistedOriginalFrames()
+
+        isStopped = false
 
         // Start event observer
         observer.start()
@@ -45,14 +76,77 @@ public final class WindowManager: AXEventObserverDelegate {
         timer.resume()
         gcTimer = timer
 
+        // Registered last so a throwing start() never leaves a dangling
+        // callback pointer behind after the caller exits.
+        CGDisplayRegisterReconfigurationCallback(
+            displayReconfigurationCallback,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
+
         retile()
     }
 
+    private func loadPersistedOriginalFrames() {
+        guard let data = try? Data(contentsOf: restoreFramesURL),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: [Double]] else { return }
+        for (key, values) in dict {
+            guard let id = CGWindowID(key), values.count == 4 else { continue }
+            originalFrames[id] = CGRect(x: values[0], y: values[1], width: values[2], height: values[3])
+        }
+    }
+
     public func stop() {
+        isStopped = true
         gcTimer?.cancel()
         gcTimer = nil
+        retileWork?.cancel()
+        retileWork = nil
         observer.stop()
+
+        var windowPID: [CGWindowID: pid_t] = [:]
+        for col in ribbon.columns {
+            for win in col.windows {
+                windowPID[win.id] = win.pid
+            }
+        }
+
+        var restoreFrames: [(id: CGWindowID, pid: pid_t, frame: CGRect)] = []
+        for (id, _) in trackedWindows {
+            guard let pid = windowPID[id], let orig = originalFrames[id] else { continue }
+            restoreFrames.append((id: id, pid: pid, frame: orig))
+        }
+
+        // The diff cache may be stale (manual drags); never skip restores.
+        lastAppliedFrames.removeAll()
+        applyFrames(restoreFrames)
+
+        if FileManager.default.fileExists(atPath: restoreFramesURL.path) {
+            try? FileManager.default.removeItem(at: restoreFramesURL)
+        }
+
+        CGDisplayRemoveReconfigurationCallback(
+            displayReconfigurationCallback,
+            Unmanaged.passUnretained(self).toOpaque()
+        )
+
         socketServer.stop()
+    }
+
+    func displayConfigurationChanged() {
+        lastAppliedFrames.removeAll()
+        scheduleRetile()
+    }
+
+    // MARK: - Debounced Retile
+
+    private func scheduleRetile() {
+        if retileWork != nil { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.retileWork = nil
+            self?.retile()
+        }
+        retileWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: work)
     }
 
     // MARK: - Window Discovery
@@ -77,6 +171,10 @@ public final class WindowManager: AXEventObserverDelegate {
                 guard admits(win) else { continue }
                 guard let id = win.windowID else { continue }
 
+                if originalFrames[id] == nil, let frame = win.frame {
+                    originalFrames[id] = frame
+                }
+
                 let x = win.position?.x ?? 0
                 discovered.append((win: win, id: id, pid: app.processIdentifier, appName: appName, bundleId: app.bundleIdentifier, x: x))
             }
@@ -97,12 +195,44 @@ public final class WindowManager: AXEventObserverDelegate {
             observer.observeWindowDestroyed(element: entry.win, pid: entry.pid)
             adoptedSinceLastSweep.insert(entry.id)
         }
+
+        persistOriginalFrames()
+    }
+
+    // MARK: - Screen Resolution
+
+    private func resolveScreen() -> NSScreen? {
+        if let activeID = ribbon.activeWindow?.id,
+           let frame = trackedWindows[activeID]?.frame {
+            let primaryScreenHeight = NSScreen.screens.first?.frame.height ?? 0
+            let cocoaY = primaryScreenHeight - (frame.origin.y + frame.height)
+            let cocoaFrame = CGRect(x: frame.origin.x, y: cocoaY, width: frame.width, height: frame.height)
+
+            var bestScreen: NSScreen?
+            var maxArea: CGFloat = 0
+
+            for screen in NSScreen.screens {
+                let inter = screen.frame.intersection(cocoaFrame)
+                if !inter.isNull {
+                    let area = inter.width * inter.height
+                    if area > maxArea {
+                        maxArea = area
+                        bestScreen = screen
+                    }
+                }
+            }
+
+            if let best = bestScreen, maxArea > 0 {
+                return best
+            }
+        }
+        return NSScreen.main ?? NSScreen.screens.first
     }
 
     // MARK: - Layout & Retile
 
     public func retile() {
-        guard let screen = NSScreen.main else { return }
+        guard let screen = resolveScreen() else { return }
         // NSScreen coordinates have Y origin at bottom-left; WindowServer has Y origin at top-left
         let primaryScreenHeight = NSScreen.screens.first?.frame.height ?? screen.frame.height
         let cocoaFrame = screen.visibleFrame
@@ -113,7 +243,30 @@ public final class WindowManager: AXEventObserverDelegate {
             height: cocoaFrame.height
         )
 
-        let plan = LayoutEngine.computePlan(for: ribbon, screenFrame: windowServerFrame, config: config)
+        var leftAdjacent = false
+        var rightAdjacent = false
+        for other in NSScreen.screens where other != screen {
+            let yOverlap = max(other.frame.minY, screen.frame.minY) < min(other.frame.maxY, screen.frame.maxY)
+            if yOverlap {
+                if abs(other.frame.maxX - screen.frame.minX) < 1.0 {
+                    leftAdjacent = true
+                }
+                if abs(other.frame.minX - screen.frame.maxX) < 1.0 {
+                    rightAdjacent = true
+                }
+            }
+        }
+
+        let canvasW = windowServerFrame.width - (config.edgeMargin * 2)
+        ribbon.viewportOffset = LayoutEngine.minimalScrollOffset(for: ribbon, canvasWidth: canvasW, config: config)
+
+        let plan = LayoutEngine.computePlan(
+            for: ribbon,
+            screenFrame: windowServerFrame,
+            config: config,
+            allowLeftBleed: !leftAdjacent,
+            allowRightBleed: !rightAdjacent
+        )
 
         var windowPID: [CGWindowID: pid_t] = [:]
         for col in ribbon.columns {
@@ -122,36 +275,56 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
-        var placementsByPID: [pid_t: [WindowPlacement]] = [:]
+        var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect)] = []
         for placement in plan.placements {
             guard let pid = windowPID[placement.windowID] else { continue }
-            placementsByPID[pid, default: []].append(placement)
+            framesToApply.append((id: placement.windowID, pid: pid, frame: placement.frame))
         }
 
-        for (pid, placements) in placementsByPID {
+        applyFrames(framesToApply)
+    }
+
+    private func applyFrames(_ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect)]) {
+        // Filter unchanged frames first so untouched apps skip the
+        // AXEnhancedUserInterface round-trips entirely.
+        var placementsByPID: [pid_t: [(elem: AXElement, id: CGWindowID, frame: CGRect)]] = [:]
+        for entry in frames {
+            guard let elem = trackedWindows[entry.id] else { continue }
+            if let last = lastAppliedFrames[entry.id] {
+                let dx = abs(last.origin.x - entry.frame.origin.x)
+                let dy = abs(last.origin.y - entry.frame.origin.y)
+                let dw = abs(last.size.width - entry.frame.size.width)
+                let dh = abs(last.size.height - entry.frame.size.height)
+                if dx < 0.5 && dy < 0.5 && dw < 0.5 && dh < 0.5 {
+                    continue
+                }
+            }
+            placementsByPID[entry.pid, default: []].append((elem: elem, id: entry.id, frame: entry.frame))
+        }
+
+        for (pid, entries) in placementsByPID {
             let appElem = AXElement.application(pid: pid)
             let wasEnhanced = appElem.enhancedUserInterface
             if wasEnhanced {
                 appElem.enhancedUserInterface = false
             }
-            for placement in placements {
-                guard let elem = trackedWindows[placement.windowID] else { continue }
-                if placement.isHidden {
-                    elem.isHidden = true
-                } else {
-                    elem.isHidden = false
-                    elem.setFrame(placement.frame)
-                }
+            for entry in entries {
+                entry.elem.setFrame(entry.frame)
+                lastAppliedFrames[entry.id] = entry.frame
             }
             if wasEnhanced {
                 appElem.enhancedUserInterface = true
             }
         }
+    }
 
-        // Focus the active window
-        if let active = ribbon.activeWindow, let elem = trackedWindows[active.id] {
-            elem.focus()
-        }
+    // MARK: - Focus
+
+    private func focusActiveWindow() {
+        guard let active = ribbon.activeWindow, let elem = trackedWindows[active.id] else { return }
+        pendingFocusEchoes[active.id] = .now() + .milliseconds(150)
+        NSRunningApplication(processIdentifier: active.pid)?.activate()
+        elem.focus()
     }
 
     // MARK: - IPC Command Handling
@@ -159,6 +332,8 @@ public final class WindowManager: AXEventObserverDelegate {
     public func handleCommand(_ command: String) -> String {
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
+
+        let previousActive = ribbon.activeWindow?.id
 
         switch action {
         case "focus":
@@ -189,7 +364,10 @@ public final class WindowManager: AXEventObserverDelegate {
             return "error: unknown command '\(command)'"
         }
 
-        retile()
+        scheduleRetile()
+        if ribbon.activeWindow?.id != previousActive {
+            focusActiveWindow()
+        }
         return "ok"
     }
 
@@ -202,6 +380,14 @@ public final class WindowManager: AXEventObserverDelegate {
               !config.ignoredApps.contains(appName) else { return false }
         guard admits(element) else { return false }
         guard let id = element.windowID else { return false }
+
+        // Never overwrite an existing entry: on re-adoption (deminiaturize,
+        // unhide, space change) the current frame is our own tiled frame,
+        // not the user's original.
+        if originalFrames[id] == nil, let frame = element.frame {
+            originalFrames[id] = frame
+            persistOriginalFrames()
+        }
 
         trackedWindows[id] = element
         let model = WindowModel(
@@ -217,9 +403,40 @@ public final class WindowManager: AXEventObserverDelegate {
         return true
     }
 
+    // Drops a window from tiling but keeps its originalFrames entry — a
+    // minimized/hidden window is still alive and must restore on quit.
+    // Dead-window paths (destroy, GC sweep, app termination) call
+    // forgetOriginalFrame separately.
     private func removeFromRibbon(id: CGWindowID) {
         trackedWindows.removeValue(forKey: id)
+        lastAppliedFrames.removeValue(forKey: id)
         ribbon.removeWindow(id: id)
+    }
+
+    private func forgetOriginalFrame(id: CGWindowID) {
+        if originalFrames.removeValue(forKey: id) != nil {
+            persistOriginalFrames()
+        }
+    }
+
+    private func persistOriginalFrames() {
+        let url = restoreFramesURL
+        let dir = url.deletingLastPathComponent()
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+
+        var dict: [String: [Double]] = [:]
+        for (id, frame) in originalFrames {
+            dict[String(id)] = [
+                Double(frame.origin.x),
+                Double(frame.origin.y),
+                Double(frame.size.width),
+                Double(frame.size.height)
+            ]
+        }
+
+        if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted]) {
+            try? data.write(to: url, options: .atomic)
+        }
     }
 
     private func rescanAfterSpaceChange() {
@@ -261,7 +478,7 @@ public final class WindowManager: AXEventObserverDelegate {
         }
 
         // 4. retile()
-        retile()
+        scheduleRetile()
     }
 
     // MARK: - Liveness GC
@@ -285,8 +502,20 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
+        // Also prune originalFrames of dead windows (including stale entries
+        // loaded from a crashed run's restore file).
+        let deadOriginals = originalFrames.keys.filter {
+            !liveIDs.contains($0) && !adoptedSinceLastSweep.contains($0)
+        }
+        if !deadOriginals.isEmpty {
+            for id in deadOriginals {
+                originalFrames.removeValue(forKey: id)
+            }
+            persistOriginalFrames()
+        }
+
         if removedAny {
-            retile()
+            scheduleRetile()
         }
         adoptedSinceLastSweep.removeAll()
     }
@@ -296,31 +525,44 @@ public final class WindowManager: AXEventObserverDelegate {
     public func windowCreated(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
         if adopt(element: element, pid: pid, activate: isFrontmost) {
-            retile()
+            scheduleRetile()
         }
     }
 
     public func windowDestroyed(element: AXElement, pid: pid_t) {
         guard let id = element.windowID else { return }
         removeFromRibbon(id: id)
-        retile()
+        forgetOriginalFrame(id: id)
+        scheduleRetile()
     }
 
     public func windowMinimized(element: AXElement, pid: pid_t) {
         guard let id = element.windowID else { return }
         removeFromRibbon(id: id)
-        retile()
+        scheduleRetile()
     }
 
     public func windowDeminiaturized(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
         if adopt(element: element, pid: pid, activate: isFrontmost) {
-            retile()
+            scheduleRetile()
         }
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
         guard let id = element.windowID else { return }
+
+        let now = DispatchTime.now()
+        pendingFocusEchoes = pendingFocusEchoes.filter { $0.value >= now }
+        if pendingFocusEchoes.removeValue(forKey: id) != nil {
+            return
+        }
+
+        // A real (user-initiated) focus usually precedes a manual drag; the
+        // diff cache can't see drags yet (kAXMoved lands in Phase 4), so
+        // evict this window's entry to force a fresh frame write next retile.
+        lastAppliedFrames.removeValue(forKey: id)
+
         // Update active column if focused window is tracked
         for (cIdx, col) in ribbon.columns.enumerated() {
             if let rIdx = col.windows.firstIndex(where: { $0.id == id }) {
@@ -329,7 +571,7 @@ public final class WindowManager: AXEventObserverDelegate {
                     var updatedCol = col
                     updatedCol.activeRowIndex = rIdx
                     ribbon.columns[cIdx] = updatedCol
-                    retile()
+                    scheduleRetile()
                 }
                 break
             }
@@ -350,13 +592,13 @@ public final class WindowManager: AXEventObserverDelegate {
             for id in windowIDs {
                 removeFromRibbon(id: id)
             }
-            retile()
+            scheduleRetile()
         case .unhidden:
             guard let pid = pid else { return }
             for win in AXElement.application(pid: pid).windows {
                 adopt(element: win, pid: pid, activate: false)
             }
-            retile()
+            scheduleRetile()
         case .spaceChanged:
             rescanAfterSpaceChange()
         }
@@ -366,8 +608,11 @@ public final class WindowManager: AXEventObserverDelegate {
         let matchingIDs = ribbon.columns.flatMap { $0.windows }.filter { $0.pid == pid }.map { $0.id }
         for id in matchingIDs {
             trackedWindows.removeValue(forKey: id)
+            lastAppliedFrames.removeValue(forKey: id)
+            originalFrames.removeValue(forKey: id)
         }
+        persistOriginalFrames()
         ribbon.removeWindows(pid: pid)
-        retile()
+        scheduleRetile()
     }
 }

@@ -4,12 +4,12 @@ import CoreGraphics
 public struct WindowPlacement: Sendable {
     public let windowID: CGWindowID
     public let frame: CGRect
-    public let isHidden: Bool
+    public let isStashed: Bool
 
-    public init(windowID: CGWindowID, frame: CGRect, isHidden: Bool) {
+    public init(windowID: CGWindowID, frame: CGRect, isStashed: Bool) {
         self.windowID = windowID
         self.frame = frame
-        self.isHidden = isHidden
+        self.isStashed = isStashed
     }
 }
 
@@ -24,84 +24,97 @@ public struct TilingPlan: Sendable {
 public struct LayoutEngine: Sendable {
     public init() {}
 
+    public static func columnGeometry(
+        for ribbon: Ribbon,
+        canvasWidth: Double,
+        config: Config
+    ) -> [(x: Double, width: Double)] {
+        guard !ribbon.columns.isEmpty else { return [] }
+        var result: [(x: Double, width: Double)] = []
+        result.reserveCapacity(ribbon.columns.count)
+        var currentX = 0.0
+        for col in ribbon.columns {
+            let width = min(canvasWidth, col.widthRatio * canvasWidth)
+            result.append((x: currentX, width: width))
+            currentX += width + config.windowGap
+        }
+        return result
+    }
+
+    public static func minimalScrollOffset(
+        for ribbon: Ribbon,
+        canvasWidth: Double,
+        config: Config
+    ) -> Double {
+        guard !ribbon.columns.isEmpty else { return 0.0 }
+        let geometry = columnGeometry(for: ribbon, canvasWidth: canvasWidth, config: config)
+        guard !geometry.isEmpty else { return 0.0 }
+
+        var offset = ribbon.viewportOffset
+        let activeIdx = max(0, min(ribbon.activeColumnIndex, geometry.count - 1))
+        let a = geometry[activeIdx]
+
+        if a.width >= canvasWidth {
+            offset = a.x
+        } else if a.x < offset {
+            offset = a.x
+        } else if a.x + a.width > offset + canvasWidth {
+            offset = a.x + a.width - canvasWidth
+        }
+
+        let last = geometry[geometry.count - 1]
+        let totalStripWidth = last.x + last.width
+        return max(0.0, min(offset, max(0.0, totalStripWidth - canvasWidth)))
+    }
+
     public static func computePlan(
         for ribbon: Ribbon,
         screenFrame: CGRect,
-        config: Config
+        config: Config,
+        allowLeftBleed: Bool = true,
+        allowRightBleed: Bool = true
     ) -> TilingPlan {
         guard !ribbon.columns.isEmpty else { return TilingPlan() }
-
-        var placements: [WindowPlacement] = []
 
         let canvasX = screenFrame.minX + config.edgeMargin
         let canvasY = screenFrame.minY + config.edgeMargin
         let canvasW = screenFrame.width - (config.edgeMargin * 2)
         let canvasH = screenFrame.height - (config.edgeMargin * 2)
 
-        let activeIdx = max(0, min(ribbon.activeColumnIndex, ribbon.columns.count - 1))
-        let activeCol = ribbon.columns[activeIdx]
-        let activeWidth = min(canvasW, activeCol.widthRatio * canvasW)
+        let geometry = columnGeometry(for: ribbon, canvasWidth: canvasW, config: config)
+        var placements: [WindowPlacement] = []
+        let canvasRight = canvasX + canvasW
 
-        // Center the active column within the canvas
-        let activeX = canvasX + (canvasW - activeWidth) / 2.0
+        for (index, col) in ribbon.columns.enumerated() {
+            let geo = geometry[index]
+            let colX = canvasX + geo.x - ribbon.viewportOffset
+            let colW = geo.width
 
-        // 1. Place active column
-        placements.append(contentsOf: layoutColumn(
-            column: activeCol,
-            x: activeX,
-            width: activeWidth,
-            canvasY: canvasY,
-            canvasH: canvasH,
-            gap: config.windowGap,
-            isHidden: false
-        ))
+            let leftEdge = colX
+            let rightEdge = colX + colW
 
-        // 2. Place left columns
-        var leftEdge = activeX - config.windowGap
-        if activeIdx > 0 {
-            for colIdx in stride(from: activeIdx - 1, through: 0, by: -1) {
-                let col = ribbon.columns[colIdx]
-                let w = min(canvasW, col.widthRatio * canvasW)
-                let colX = leftEdge - w
-
-                // Zero-bleed: if completely off the left screen edge, hide windows
-                let isOffScreen = (colX + w) < canvasX
-                placements.append(contentsOf: layoutColumn(
-                    column: col,
-                    x: colX,
-                    width: w,
-                    canvasY: canvasY,
-                    canvasH: canvasH,
-                    gap: config.windowGap,
-                    isHidden: isOffScreen
-                ))
-
-                leftEdge = colX - config.windowGap
+            let isStashed: Bool
+            if rightEdge <= canvasX || leftEdge >= canvasRight {
+                isStashed = true
+            } else if leftEdge < canvasX && !allowLeftBleed {
+                isStashed = true
+            } else if rightEdge > canvasRight && !allowRightBleed {
+                isStashed = true
+            } else {
+                isStashed = false
             }
-        }
 
-        // 3. Place right columns
-        var rightEdge = activeX + activeWidth + config.windowGap
-        if activeIdx < ribbon.columns.count - 1 {
-            for colIdx in (activeIdx + 1)..<ribbon.columns.count {
-                let col = ribbon.columns[colIdx]
-                let w = min(canvasW, col.widthRatio * canvasW)
-                let colX = rightEdge
-
-                // Zero-bleed: if completely off the right screen edge, hide windows
-                let isOffScreen = colX > (canvasX + canvasW)
-                placements.append(contentsOf: layoutColumn(
-                    column: col,
-                    x: colX,
-                    width: w,
-                    canvasY: canvasY,
-                    canvasH: canvasH,
-                    gap: config.windowGap,
-                    isHidden: isOffScreen
-                ))
-
-                rightEdge = colX + w + config.windowGap
-            }
+            placements.append(contentsOf: layoutColumn(
+                column: col,
+                x: colX,
+                width: colW,
+                canvasY: canvasY,
+                canvasH: canvasH,
+                gap: config.windowGap,
+                isStashed: isStashed,
+                screenFrame: screenFrame,
+                config: config
+            ))
         }
 
         return TilingPlan(placements: placements)
@@ -114,15 +127,44 @@ public struct LayoutEngine: Sendable {
         canvasY: Double,
         canvasH: Double,
         gap: Double,
-        isHidden: Bool
+        isStashed: Bool,
+        screenFrame: CGRect,
+        config: Config
     ) -> [WindowPlacement] {
         var results: [WindowPlacement] = []
         let count = column.windows.count
         guard count > 0 else { return results }
 
+        let s = config.stashSliverSize
+
+        func makePlacement(winID: CGWindowID, tiledFrame: CGRect) -> WindowPlacement {
+            if !isStashed {
+                return WindowPlacement(windowID: winID, frame: tiledFrame, isStashed: false)
+            } else {
+                let w = tiledFrame.width
+                let h = tiledFrame.height
+                let origin: CGPoint
+                switch config.stashCorner {
+                case .bottomRight:
+                    origin = CGPoint(x: screenFrame.maxX - s, y: screenFrame.maxY - s)
+                case .bottomLeft:
+                    origin = CGPoint(x: screenFrame.minX - w + s, y: screenFrame.maxY - s)
+                // WindowServer refuses to place a title bar above the screen
+                // top, so top corners can only hide windows horizontally: the
+                // sliver is a full-height vertical strip at the screen edge.
+                case .topRight:
+                    origin = CGPoint(x: screenFrame.maxX - s, y: screenFrame.minY)
+                case .topLeft:
+                    origin = CGPoint(x: screenFrame.minX - w + s, y: screenFrame.minY)
+                }
+                let stashedFrame = CGRect(origin: origin, size: CGSize(width: w, height: h))
+                return WindowPlacement(windowID: winID, frame: stashedFrame, isStashed: true)
+            }
+        }
+
         if count == 1 {
             let frame = CGRect(x: x, y: canvasY, width: width, height: canvasH)
-            results.append(WindowPlacement(windowID: column.windows[0].id, frame: frame, isHidden: isHidden))
+            results.append(makePlacement(winID: column.windows[0].id, tiledFrame: frame))
         } else {
             // Distribute height evenly among stacked windows with inner gap
             let totalGaps = Double(count - 1) * gap
@@ -131,7 +173,7 @@ public struct LayoutEngine: Sendable {
 
             for win in column.windows {
                 let frame = CGRect(x: x, y: currentY, width: width, height: windowH)
-                results.append(WindowPlacement(windowID: win.id, frame: frame, isHidden: isHidden))
+                results.append(makePlacement(winID: win.id, tiledFrame: frame))
                 currentY += windowH + gap
             }
         }

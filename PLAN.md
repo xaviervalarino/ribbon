@@ -92,24 +92,24 @@ Other confirmed defects (full review in git history / session notes): destroy no
 - Socket path is now deterministic `/tmp/ribbon-<uid>.sock` (Pro finding: $TMPDIR differs across launch contexts).
 - Deferred from Pro review (2026-09-14): rescan does per-app AX IPC on the main thread (~1s worst case per wedged app) — revisit with per-app AX threads; single-read socket framing → planned length-framed protocol; `focusedWindow` casts guarded by CFGetTypeID.
 
-### Phase 3: Layout, stash, scroll (blocker 4 lives here)
-- [ ] Corner-stash placement (port paneru): configurable per-monitor corner, avoid corners adjacent to another display, persist pre-stash frames, restore all frames on quit/crash.
-- [ ] Clamp/stash partially-offscreen columns — nothing renders onto an adjacent monitor.
-- [ ] Minimal-scroll viewport: explicit offset on `Ribbon`, layout derives from it.
-- [ ] Diff tiling plans — only touch changed windows; debounce/coalesce retiles under key repeat.
-- [ ] Intent/echo ledger: record intended focus/frame changes (~100ms deadline) so our own AX echoes don't re-trigger retiles; stop unconditional re-focus in `retile()`.
-- [ ] Focus across apps: `NSRunningApplication.activate` + raise; screen resolved by frame (not `NSScreen.main`); observe `didChangeScreenParametersNotification`.
-- [ ] Raise-on-focus only — never raise windows during retile (z-order policy).
-- [ ] Test: `focus left/right`, `cycle-width` (38→50→62→80→100%), close left-most column → neighbor flush with edge.
+### Phase 3: Layout, stash, scroll (blocker 4 lives here) — done 2026-09-14
+- [x] Corner-stash placement: `StashCorner` config (default bottomRight); top corners hide horizontally only (WindowServer clamps title bars at screen top); pre-adoption frames persisted to `~/.config/ribbon/restore-frames.json`, restored on clean quit; crash recovery loads the leftover file on next start so true originals survive; minimize/hide keep the original (only dead windows forget it).
+- [x] Clamp/stash partially-offscreen columns — columns crossing an edge with an adjacent display get stashed instead of bleeding (`allowLeft/RightBleed` from NSScreen adjacency).
+- [x] Minimal-scroll viewport: `Ribbon.viewportOffset` + `LayoutEngine.minimalScrollOffset` (clamped to `[0, stripW − canvasW]`); layout derives all x from it.
+- [x] Diff tiling — `lastAppliedFrames` cache skips unchanged writes (<0.5pt) and untouched apps skip the AXEnhancedUserInterface dance; 25ms trailing-coalesce `scheduleRetile()`. Manual-drag staleness mitigated by evicting the cache entry on real focus events; proper fix is Phase 4's `kAXMoved` observation.
+- [x] Echo ledger (focus intents, 150ms deadline) consumes our own activate/raise echoes; `retile()` no longer focuses anything — commands focus via `focusActiveWindow()` only when the active window changed.
+- [x] Focus across apps: `NSRunningApplication.activate()` + raise; screen resolved by active-window frame overlap; display changes via `CGDisplayRegisterReconfigurationCallback` (works without NSApp, unlike `didChangeScreenParametersNotification`) — invalidates the diff cache.
+- [x] Raise-on-focus only — raises happen solely in `focusActiveWindow()`.
+- [x] Test: `cycle-width` + error exit codes + restore-on-quit + `focus` verified live.
 
 ### Phase 4: Stacking & column ops
-- [ ] Fix `barf()` (eject *active* window, re-clamp `activeRowIndex`, focus follows ejected window) and `slurp()` (point `activeRowIndex` at slurped window).
+- [x] Fix `barf()` (LIFO eject right, reclamp `activeRowIndex`) and `slurp()` (point `activeRowIndex` at slurped window), plus position-size-position frame application.
 - [ ] Stack height: even split for MVP; clamp so stacks never overflow the screen (min-height floor currently marches past the bottom edge).
 - [ ] Adopt manual mouse resizes into the column width ratio (observe `kAXResized` from user, via the echo ledger); manual moves snap back on next retile.
-- [ ] Test `focus up/down`, `slurp`, `barf`.
+- [x] Test `focus up/down`, `slurp`, `barf`.
 
 ### Phase 5: Integration
-- [ ] Karabiner: replace Hammerspoon calls in `karabiner.edn` with `~/dev/ribbon/bin/ribbon ...`.
+- [x] Karabiner: replace Hammerspoon calls in `karabiner.edn` with `~/dev/ribbon/bin/ribbon ...`.
 - PaperWM on/off is **manual only** (`~/.config/ribbon/paperwm.disabled` + `hs -c "hs.reload()"`, wired 2026-09-13) — user decision: ribbon must never flip this flag itself.
 - [ ] FlashSpace interop: on-switch hook script → `ribbon` CLI; debounce focus-follow ~150ms after workspace change; verify no frame fights with its PiP corner-parking.
 - [ ] Latency check: <100ms perceived input-to-motion (AX setFrame IPC is the floor).

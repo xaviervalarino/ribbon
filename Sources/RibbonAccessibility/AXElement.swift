@@ -90,7 +90,11 @@ public final class AXElement {
     }
 
     public func setFrame(_ rect: CGRect) {
-        // Set size first then position (or position then size) to avoid WindowServer bounce
+        // WindowServer clamps size if current origin leaves insufficient space,
+        // and clamps origin if current size exceeds destination boundaries.
+        // Apply position first so expanding windows can grow, size to update dimensions,
+        // then position again so shrinking windows placed near screen edges clear clamps.
+        position = rect.origin
         size = rect.size
         position = rect.origin
     }

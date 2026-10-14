@@ -1,5 +1,9 @@
 import Foundation
 
+public enum StashCorner: String, Sendable, Codable {
+    case bottomRight, bottomLeft, topRight, topLeft
+}
+
 public struct Config: Sendable {
     public var windowGap: Double
     public var edgeMargin: Double
@@ -7,6 +11,8 @@ public struct Config: Sendable {
     public var widthCycleRatios: [Double]
     public var appWidthRatios: [String: Double]
     public var ignoredApps: Set<String>
+    public var stashCorner: StashCorner
+    public var stashSliverSize: Double
 
     public init(
         windowGap: Double = 8.0,
@@ -34,7 +40,9 @@ public struct Config: Sendable {
             "Karabiner-Elements",
             "Activity Monitor",
             "borders"
-        ]
+        ],
+        stashCorner: StashCorner = .bottomRight,
+        stashSliverSize: Double = 2.0
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -42,6 +50,8 @@ public struct Config: Sendable {
         self.widthCycleRatios = widthCycleRatios
         self.appWidthRatios = appWidthRatios
         self.ignoredApps = ignoredApps
+        self.stashCorner = stashCorner
+        self.stashSliverSize = stashSliverSize
     }
 
     public static let `default` = Config()

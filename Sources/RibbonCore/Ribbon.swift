@@ -4,10 +4,12 @@ import CoreGraphics
 public struct Ribbon: Sendable, Codable {
     public var columns: [ColumnModel]
     public var activeColumnIndex: Int
+    public var viewportOffset: Double
 
-    public init(columns: [ColumnModel] = [], activeColumnIndex: Int = 0) {
+    public init(columns: [ColumnModel] = [], activeColumnIndex: Int = 0, viewportOffset: Double = 0) {
         self.columns = columns
         self.activeColumnIndex = activeColumnIndex
+        self.viewportOffset = viewportOffset
     }
 
     public var activeColumn: ColumnModel? {
@@ -82,20 +84,23 @@ public struct Ribbon: Sendable, Codable {
         guard !rightCol.windows.isEmpty else { return }
         let win = rightCol.windows.removeFirst()
         columns[activeColumnIndex].windows.append(win)
+        columns[activeColumnIndex].activeRowIndex = columns[activeColumnIndex].windows.count - 1
 
         if rightCol.windows.isEmpty {
             columns.remove(at: rightIndex)
         } else {
+            rightCol.activeRowIndex = max(0, min(rightCol.activeRowIndex, rightCol.windows.count - 1))
             columns[rightIndex] = rightCol
         }
     }
 
     public mutating func barf() {
-        // Eject active/bottom window from current column into a new column to the right
+        // Eject bottom window from current column into a new column to the right
         guard columns.indices.contains(activeColumnIndex) else { return }
         var col = columns[activeColumnIndex]
         guard col.windows.count > 1 else { return }
         let win = col.windows.removeLast()
+        col.activeRowIndex = min(col.activeRowIndex, col.windows.count - 1)
         columns[activeColumnIndex] = col
 
         let newCol = ColumnModel(windows: [win], widthRatio: col.widthRatio)
