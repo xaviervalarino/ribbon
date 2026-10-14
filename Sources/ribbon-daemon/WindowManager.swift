@@ -27,6 +27,7 @@ public final class WindowManager: AXEventObserverDelegate {
     private var retileWork: DispatchWorkItem?
     private var resizeDebounceWork: DispatchWorkItem?
     private var lastAppliedFrames: [CGWindowID: CGRect] = [:]
+    private var lastStashedState: [CGWindowID: Bool] = [:]
     private var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
     private var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
     private var originalFrames: [CGWindowID: CGRect] = [:]
@@ -115,10 +116,10 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
-        var restoreFrames: [(id: CGWindowID, pid: pid_t, frame: CGRect)] = []
+        var restoreFrames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
         for (id, _) in trackedWindows {
             guard let pid = windowPID[id], let orig = originalFrames[id] else { continue }
-            restoreFrames.append((id: id, pid: pid, frame: orig))
+            restoreFrames.append((id: id, pid: pid, frame: orig, isStashed: false))
         }
 
         // The diff cache may be stale (manual drags); never skip restores.
@@ -281,21 +282,21 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
-        var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect)] = []
+        var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
         for placement in plan.placements {
             guard let pid = windowPID[placement.windowID] else { continue }
-            framesToApply.append((id: placement.windowID, pid: pid, frame: placement.frame))
+            framesToApply.append((id: placement.windowID, pid: pid, frame: placement.frame, isStashed: placement.isStashed))
         }
 
         applyFrames(framesToApply)
     }
 
-    private func applyFrames(_ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect)]) {
-        // Filter unchanged frames first so untouched apps skip the
-        // AXEnhancedUserInterface round-trips entirely.
-        var placementsByPID: [pid_t: [(elem: AXElement, id: CGWindowID, frame: CGRect)]] = [:]
+    private func applyFrames(_ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)]) {
+        // Filter unchanged frames first so untouched apps skip AX round-trips entirely.
+        var placementsByPID: [pid_t: [(elem: AXElement, id: CGWindowID, frame: CGRect, needsFullFrame: Bool)]] = [:]
         for entry in frames {
             guard let elem = trackedWindows[entry.id] else { continue }
+            let needsFullFrame: Bool
             if let last = lastAppliedFrames[entry.id] {
                 let dx = abs(last.origin.x - entry.frame.origin.x)
                 let dy = abs(last.origin.y - entry.frame.origin.y)
@@ -304,23 +305,33 @@ public final class WindowManager: AXEventObserverDelegate {
                 if dx < 0.5 && dy < 0.5 && dw < 0.5 && dh < 0.5 {
                     continue
                 }
+                let stashedChanged = (lastStashedState[entry.id] ?? false) != entry.isStashed
+                needsFullFrame = dw >= 0.5 || dh >= 0.5 || stashedChanged
+            } else {
+                needsFullFrame = true
             }
-            placementsByPID[entry.pid, default: []].append((elem: elem, id: entry.id, frame: entry.frame))
+            lastStashedState[entry.id] = entry.isStashed
+            placementsByPID[entry.pid, default: []].append((elem: elem, id: entry.id, frame: entry.frame, needsFullFrame: needsFullFrame))
         }
 
         for (pid, entries) in placementsByPID {
-            let appElem = AXElement.application(pid: pid)
-            let wasEnhanced = appElem.enhancedUserInterface
+            let anyNeedsFullFrame = entries.contains(where: { $0.needsFullFrame })
+            let appElem = anyNeedsFullFrame ? AXElement.application(pid: pid) : nil
+            let wasEnhanced = appElem?.enhancedUserInterface ?? false
             if wasEnhanced {
-                appElem.enhancedUserInterface = false
+                appElem?.enhancedUserInterface = false
             }
             for entry in entries {
-                entry.elem.setFrame(entry.frame)
+                if entry.needsFullFrame {
+                    entry.elem.setFrame(entry.frame)
+                } else {
+                    entry.elem.position = entry.frame.origin
+                }
                 lastAppliedFrames[entry.id] = entry.frame
                 pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
             }
             if wasEnhanced {
-                appElem.enhancedUserInterface = true
+                appElem?.enhancedUserInterface = true
             }
         }
     }
@@ -373,7 +384,9 @@ public final class WindowManager: AXEventObserverDelegate {
             return "error: unknown command '\(command)'"
         }
 
-        scheduleRetile()
+        retileWork?.cancel()
+        retileWork = nil
+        retile()
         if ribbon.activeWindow?.id != previousActive {
             focusActiveWindow()
         }
@@ -422,6 +435,7 @@ public final class WindowManager: AXEventObserverDelegate {
             windowIDsByElement.removeValue(forKey: elem.rawElement)
         }
         lastAppliedFrames.removeValue(forKey: id)
+        lastStashedState.removeValue(forKey: id)
         ribbon.removeWindow(id: id)
     }
 
