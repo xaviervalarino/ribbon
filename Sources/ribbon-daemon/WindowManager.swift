@@ -607,10 +607,7 @@ public final class WindowManager: AXEventObserverDelegate {
         guard let id = element.windowID else { return false }
 
         if let onScreen = onScreenWindowIDs(), !onScreen.contains(id) {
-            let isFrontApp = NSWorkspace.shared.frontmostApplication?.processIdentifier == pid
-            if !isFrontApp {
-                return false
-            }
+            return false
         }
 
         // Never overwrite an existing entry: on re-adoption (deminiaturize,
@@ -806,6 +803,13 @@ public final class WindowManager: AXEventObserverDelegate {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
+        } else if isFrontmost {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+                guard let self else { return }
+                if self.adopt(element: element, pid: pid, activate: true) {
+                    self.scheduleRetile()
+                }
+            }
         }
     }
 
@@ -948,6 +952,15 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
+        if foundDisplayID == nil {
+            if let onScreen = onScreenWindowIDs(), onScreen.contains(id), admits(element) {
+                if adopt(element: element, pid: pid, activate: true) {
+                    scheduleRetile()
+                    return
+                }
+            }
+        }
+
         if let dID = foundDisplayID, var r = ribbons[dID] {
             activeDisplayID = dID
             let wasOverview = r.isOverview
@@ -1006,7 +1019,10 @@ public final class WindowManager: AXEventObserverDelegate {
                 self?.rescanAfterSpaceChange()
             }
             spaceChangeWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150), execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(config.spaceChangeDebounceMs), execute: work)
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(max(150, config.spaceChangeDebounceMs + 100))) { [weak self] in
+                self?.rescanAfterSpaceChange()
+            }
         }
     }
 

@@ -4,7 +4,7 @@ public enum StashCorner: String, Sendable, Codable {
     case bottomRight, bottomLeft, topRight, topLeft
 }
 
-public struct Config: Sendable {
+public struct Config: Sendable, Codable {
     public var windowGap: Double
     public var edgeMargin: Double
     public var defaultWidthRatio: Double
@@ -13,6 +13,7 @@ public struct Config: Sendable {
     public var ignoredApps: Set<String>
     public var stashCorner: StashCorner
     public var stashSliverSize: Double
+    public var spaceChangeDebounceMs: Int
 
     public init(
         windowGap: Double = 8.0,
@@ -42,7 +43,8 @@ public struct Config: Sendable {
             "borders"
         ],
         stashCorner: StashCorner = .bottomRight,
-        stashSliverSize: Double = 2.0
+        stashSliverSize: Double = 2.0,
+        spaceChangeDebounceMs: Int = 25
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -52,6 +54,7 @@ public struct Config: Sendable {
         self.ignoredApps = ignoredApps
         self.stashCorner = stashCorner
         self.stashSliverSize = stashSliverSize
+        self.spaceChangeDebounceMs = spaceChangeDebounceMs
     }
 
     public static let `default` = Config()
