@@ -155,22 +155,21 @@ public final class AXEventObserver {
             AXUIElementGetPid(element, &pid)
             let axElem = AXElement(element)
             let notifString = notification as String
-
             DispatchQueue.main.async {
                 switch notifString {
-                case kAXWindowCreatedNotification as String:
+                case kAXWindowCreatedNotification:
                     this.delegate?.windowCreated(element: axElem, pid: pid)
-                case kAXUIElementDestroyedNotification as String:
+                case kAXUIElementDestroyedNotification:
                     this.delegate?.windowDestroyed(element: axElem, pid: pid)
-                case kAXFocusedWindowChangedNotification as String:
+                case kAXFocusedWindowChangedNotification:
                     this.delegate?.windowFocused(element: axElem, pid: pid)
-                case kAXWindowMiniaturizedNotification as String:
+                case kAXWindowMiniaturizedNotification:
                     this.delegate?.windowMinimized(element: axElem, pid: pid)
-                case kAXWindowDeminiaturizedNotification as String:
+                case kAXWindowDeminiaturizedNotification:
                     this.delegate?.windowDeminiaturized(element: axElem, pid: pid)
-                case kAXWindowResizedNotification as String, kAXResizedNotification as String:
+                case kAXWindowResizedNotification, kAXResizedNotification:
                     this.delegate?.windowResized(element: axElem, pid: pid)
-                case kAXWindowMovedNotification as String, kAXMovedNotification as String:
+                case kAXWindowMovedNotification, kAXMovedNotification:
                     this.delegate?.windowMoved(element: axElem, pid: pid)
                 default:
                     break

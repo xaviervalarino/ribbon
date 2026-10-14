@@ -58,10 +58,16 @@ let connectResult = withUnsafePointer(to: &addr) {
 guard connectResult == 0 else {
     if command == "restart" {
         close(clientFD)
-        print("[ribbon] daemon not running; launching Ribbon.app...")
+        let exeURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        let binDir = exeURL.deletingLastPathComponent()
+        let appBundleURL = binDir.appendingPathComponent("Ribbon.app")
+        let appPath = FileManager.default.fileExists(atPath: appBundleURL.path)
+            ? appBundleURL.path
+            : "bin/Ribbon.app"
+        print("[ribbon] daemon not running; launching \(appPath)...")
         let task = Process()
         task.launchPath = "/usr/bin/open"
-        task.arguments = ["bin/Ribbon.app"]
+        task.arguments = [appPath]
         try? task.run()
         exit(0)
     }

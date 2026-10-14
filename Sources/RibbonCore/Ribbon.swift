@@ -144,7 +144,21 @@ public struct Ribbon: Sendable, Codable {
 
     // MARK: - Window Management
 
-    public mutating func addWindow(_ window: WindowModel, config: Config, activate: Bool = true) {
+    @discardableResult
+    public mutating func focus(windowID id: CGWindowID) -> Bool {
+        for (cIdx, col) in columns.enumerated() {
+            if let rIdx = col.windows.firstIndex(where: { $0.id == id }) {
+                activeColumnIndex = cIdx
+                var c = col
+                c.activeRowIndex = rIdx
+                columns[cIdx] = c
+                return true
+            }
+        }
+        return false
+    }
+
+    public mutating func addWindow(_ window: WindowModel, config: Config, activate: Bool = true, at index: Int? = nil) {
         // Check if window is already tracked
         for (cIdx, col) in columns.enumerated() {
             if let rIdx = col.windows.firstIndex(where: { $0.id == window.id }) {
@@ -163,8 +177,14 @@ public struct Ribbon: Sendable, Codable {
             columns.append(newColumn)
             activeColumnIndex = 0
         } else {
-            // Insert to the right of active column
-            let insertIndex = min(activeColumnIndex + 1, columns.count)
+            let insertIndex: Int
+            if let idx = index {
+                insertIndex = min(max(0, idx), columns.count)
+            } else if activate {
+                insertIndex = min(activeColumnIndex + 1, columns.count)
+            } else {
+                insertIndex = columns.count
+            }
             columns.insert(newColumn, at: insertIndex)
             if activate {
                 activeColumnIndex = insertIndex
@@ -178,7 +198,9 @@ public struct Ribbon: Sendable, Codable {
                 col.windows.remove(at: rIdx)
                 if col.windows.isEmpty {
                     columns.remove(at: cIdx)
-                    if activeColumnIndex >= columns.count {
+                    if cIdx < activeColumnIndex {
+                        activeColumnIndex -= 1
+                    } else if activeColumnIndex >= columns.count {
                         activeColumnIndex = max(0, columns.count - 1)
                     }
                 } else {

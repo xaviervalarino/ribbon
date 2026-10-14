@@ -9,8 +9,8 @@ DAEMON_SOURCES := $(wildcard Sources/RibbonCore/*.swift) \
 
 all: cli daemon bundle
 
-restart: bundle
-	@bin/ribbon restart 2>/dev/null || open bin/Ribbon.app
+restart: cli bundle
+	@bin/ribbon restart
 
 cli: bin/ribbon
 
@@ -28,6 +28,7 @@ bin/ribbon-daemon: $(DAEMON_SOURCES) | bin
 
 bin/Ribbon.app/Contents/MacOS/ribbon-daemon: bin/ribbon-daemon
 	mkdir -p bin/Ribbon.app/Contents/MacOS
+	rm -f bin/Ribbon.app/Contents/MacOS/ribbon-daemon
 	cp bin/ribbon-daemon bin/Ribbon.app/Contents/MacOS/ribbon-daemon
 
 bin/Ribbon.app/Contents/Info.plist: Resources/Info.plist

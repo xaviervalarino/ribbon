@@ -66,23 +66,4 @@ public enum SpaceManager {
         }
         return result
     }
-
-    public static func space(forWindowID windowID: CGWindowID) -> UInt64? {
-        let cid = defaultConnection()
-        let array = [windowID] as CFArray
-        guard let raw = CGSCopySpacesForWindows(cid, 0x7, array) as? [Any], let first = raw.first else {
-            return nil
-        }
-        if let num = first as? NSNumber {
-            return num.uint64Value
-        } else if let id = first as? UInt64 {
-            return id
-        } else if let id = first as? Int {
-            return UInt64(id)
-        }
-        return nil
-    }
 }
-
-@_silgen_name("CGSCopySpacesForWindows")
-private func CGSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ windowIDs: CFArray) -> CFArray?

@@ -76,6 +76,7 @@ public final class SocketServer {
 
         var on: Int32 = 1
         setsockopt(serverFD, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        _ = fcntl(serverFD, F_SETFD, FD_CLOEXEC)
 
         var addr = Self.makeAddress(socketPath)
         let bindResult = withUnsafePointer(to: &addr) {
@@ -147,6 +148,7 @@ public final class SocketServer {
 
         var on: Int32 = 1
         setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+        _ = fcntl(clientFD, F_SETFD, FD_CLOEXEC)
 
         let clientSource = DispatchSource.makeReadSource(fileDescriptor: clientFD, queue: .main)
         clientSources[clientFD] = clientSource
