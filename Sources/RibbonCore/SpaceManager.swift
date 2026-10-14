@@ -1,5 +1,6 @@
 import Foundation
 import CoreGraphics
+import ColorSync
 
 @_silgen_name("_CGSDefaultConnection")
 private func _CGSDefaultConnection() -> Int32
@@ -16,25 +17,40 @@ private func defaultConnection() -> Int32 {
 private func CGSCopyManagedDisplaySpaces(_ cid: Int32) -> CFArray?
 
 public enum SpaceManager {
-    public static func currentSpaceID() -> UInt64? {
+    public static func currentSpaceID(forDisplayID displayID: CGDirectDisplayID? = nil) -> UInt64? {
         let cid = defaultConnection()
         guard let displaySpaces = CGSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
             return nil
         }
-        for display in displaySpaces {
-            if let current = display["Current Space"] as? [String: Any] {
-                if let id = current["ManagedSpaceID"] as? UInt64 {
-                    return id
-                } else if let id = current["id64"] as? UInt64 {
-                    return id
-                } else if let id = current["ManagedSpaceID"] as? Int {
-                    return UInt64(id)
-                } else if let id = current["id64"] as? Int {
-                    return UInt64(id)
+        if let dID = displayID {
+            let isMain = CGDisplayIsMain(dID) != 0
+            var uuidStr: String?
+            if let cfuuid = CGDisplayCreateUUIDFromDisplayID(dID) {
+                uuidStr = CFUUIDCreateString(nil, cfuuid.takeRetainedValue()) as String
+            }
+            for display in displaySpaces {
+                let ident = display["Display Identifier"] as? String
+                if (isMain && ident == "Main") || (uuidStr != nil && ident == uuidStr) {
+                    if let current = display["Current Space"] as? [String: Any] {
+                        return parseSpaceID(from: current)
+                    }
                 }
             }
         }
+        for display in displaySpaces {
+            if let current = display["Current Space"] as? [String: Any],
+               let sID = parseSpaceID(from: current) {
+                return sID
+            }
+        }
         return nil
+    }
+
+    private static func parseSpaceID(from dict: [String: Any]) -> UInt64? {
+        return (dict["ManagedSpaceID"] as? UInt64)
+            ?? (dict["id64"] as? UInt64)
+            ?? (dict["ManagedSpaceID"] as? Int).map(UInt64.init)
+            ?? (dict["id64"] as? Int).map(UInt64.init)
     }
 
     public static func activeSpaces() -> [UInt64] {
@@ -44,14 +60,9 @@ public enum SpaceManager {
         }
         var result: [UInt64] = []
         for display in displaySpaces {
-            guard let current = display["Current Space"] as? [String: Any] else { continue }
-            let sID = (current["ManagedSpaceID"] as? UInt64)
-                ?? (current["id64"] as? UInt64)
-                ?? (current["ManagedSpaceID"] as? Int).map(UInt64.init)
-                ?? (current["id64"] as? Int).map(UInt64.init)
-            if let sID {
-                result.append(sID)
-            }
+            guard let current = display["Current Space"] as? [String: Any],
+                  let sID = parseSpaceID(from: current) else { continue }
+            result.append(sID)
         }
         return result
     }
@@ -59,13 +70,17 @@ public enum SpaceManager {
     public static func space(forWindowID windowID: CGWindowID) -> UInt64? {
         let cid = defaultConnection()
         let array = [windowID] as CFArray
-        guard let spaces = CGSCopySpacesForWindows(cid, 0x7, array) as? [UInt64], let first = spaces.first else {
-            if let spaces = CGSCopySpacesForWindows(cid, 0x7, array) as? [Int], let first = spaces.first {
-                return UInt64(first)
-            }
+        guard let raw = CGSCopySpacesForWindows(cid, 0x7, array) as? [Any], let first = raw.first else {
             return nil
         }
-        return first
+        if let num = first as? NSNumber {
+            return num.uint64Value
+        } else if let id = first as? UInt64 {
+            return id
+        } else if let id = first as? Int {
+            return UInt64(id)
+        }
+        return nil
     }
 }
 
