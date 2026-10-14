@@ -115,7 +115,7 @@ Other confirmed defects (full review in git history / session notes): destroy no
 - [x] Latency check: <100ms input-to-motion via immediate retile in IPC, position-only translates, and cached screen resolution.
 
 ### Phase 6: Multi-display & polish
-- [ ] Per-screen ribbons; window→screen assignment policy; display connect/disconnect handling.
+- [x] Per-screen ribbons; window→screen assignment policy; display connect/disconnect handling.
 - [ ] Config file (TOML if SPM fixed, else JSON Codable) + `reload-config`.
 - [ ] LaunchAgent plist / login item; README corrections.
 - [ ] Config gains user-editable ignore rules (bundle id + title regex).
