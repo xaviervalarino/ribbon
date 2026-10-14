@@ -15,6 +15,8 @@ public protocol AXEventObserverDelegate: AnyObject {
     func applicationTerminated(pid: pid_t)
     func windowMinimized(element: AXElement, pid: pid_t)
     func windowDeminiaturized(element: AXElement, pid: pid_t)
+    func windowResized(element: AXElement, pid: pid_t)
+    func windowMoved(element: AXElement, pid: pid_t)
     func applicationActivated(pid: pid_t)
     func applicationEventOccurred(kind: AppEventKind, pid: pid_t?)
 }
@@ -166,6 +168,10 @@ public final class AXEventObserver {
                     this.delegate?.windowMinimized(element: axElem, pid: pid)
                 case kAXWindowDeminiaturizedNotification as String:
                     this.delegate?.windowDeminiaturized(element: axElem, pid: pid)
+                case kAXWindowResizedNotification as String:
+                    this.delegate?.windowResized(element: axElem, pid: pid)
+                case kAXWindowMovedNotification as String:
+                    this.delegate?.windowMoved(element: axElem, pid: pid)
                 default:
                     break
                 }
@@ -192,7 +198,9 @@ public final class AXEventObserver {
             kAXWindowCreatedNotification,
             kAXFocusedWindowChangedNotification,
             kAXWindowMiniaturizedNotification,
-            kAXWindowDeminiaturizedNotification
+            kAXWindowDeminiaturizedNotification,
+            kAXWindowResizedNotification,
+            kAXWindowMovedNotification
         ]
 
         for notif in notifications {

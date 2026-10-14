@@ -76,6 +76,17 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
+    @discardableResult
+    public mutating func setWidthRatio(_ ratio: Double, forWindowID id: CGWindowID) -> Bool {
+        for (cIdx, col) in columns.enumerated() {
+            if col.windows.contains(where: { $0.id == id }) {
+                columns[cIdx].widthRatio = ratio
+                return true
+            }
+        }
+        return false
+    }
+
     public mutating func slurp() {
         // Pull first window from right column into current column
         guard activeColumnIndex < columns.count - 1 else { return }

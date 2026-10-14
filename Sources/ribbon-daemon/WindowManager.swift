@@ -27,6 +27,7 @@ public final class WindowManager: AXEventObserverDelegate {
     private var retileWork: DispatchWorkItem?
     private var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     private var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
+    private var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
     private var originalFrames: [CGWindowID: CGRect] = [:]
     fileprivate var isStopped = false
 
@@ -313,6 +314,7 @@ public final class WindowManager: AXEventObserverDelegate {
             for entry in entries {
                 entry.elem.setFrame(entry.frame)
                 lastAppliedFrames[entry.id] = entry.frame
+                pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
             }
             if wasEnhanced {
                 appElem.enhancedUserInterface = true
@@ -555,6 +557,56 @@ public final class WindowManager: AXEventObserverDelegate {
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         }
+    }
+
+    public func windowResized(element: AXElement, pid: pid_t) {
+        guard let id = element.windowID
+            ?? windowIDsByElement[element.rawElement]
+            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
+        else { return }
+
+        let now = DispatchTime.now()
+        pendingFrameEchoes = pendingFrameEchoes.filter { $0.value >= now }
+        if let deadline = pendingFrameEchoes[id], deadline >= now {
+            if let last = lastAppliedFrames[id], let sz = element.size {
+                if abs(last.size.width - sz.width) < 2.0 && abs(last.size.height - sz.height) < 2.0 {
+                    return
+                }
+            }
+        }
+
+        guard let newSize = element.size,
+              let screen = resolveScreen() else { return }
+
+        let canvasW = screen.visibleFrame.width - (config.edgeMargin * 2)
+        guard canvasW > 0 else { return }
+
+        let ratio = max(0.15, min(1.0, Double(newSize.width) / Double(canvasW)))
+        if ribbon.setWidthRatio(ratio, forWindowID: id) {
+            lastAppliedFrames.removeValue(forKey: id)
+            scheduleRetile()
+        }
+    }
+
+    public func windowMoved(element: AXElement, pid: pid_t) {
+        guard let id = element.windowID
+            ?? windowIDsByElement[element.rawElement]
+            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
+        else { return }
+
+        let now = DispatchTime.now()
+        pendingFrameEchoes = pendingFrameEchoes.filter { $0.value >= now }
+        if let deadline = pendingFrameEchoes[id], deadline >= now {
+            if let last = lastAppliedFrames[id], let pos = element.position {
+                if abs(last.origin.x - pos.x) < 2.0 && abs(last.origin.y - pos.y) < 2.0 {
+                    return
+                }
+            }
+        }
+
+        // Snap user-moved window back to its assigned ribbon column
+        lastAppliedFrames.removeValue(forKey: id)
+        scheduleRetile()
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
