@@ -32,6 +32,20 @@ public struct LayoutEngine: Sendable {
         guard !ribbon.columns.isEmpty else { return [] }
         var result: [(x: Double, width: Double)] = []
         result.reserveCapacity(ribbon.columns.count)
+
+        if ribbon.isOverview {
+            let count = ribbon.columns.count
+            let totalGaps = Double(max(0, count - 1)) * config.windowGap
+            let availableWidth = max(Double(count) * 40.0, canvasWidth - totalGaps)
+            let colWidth = availableWidth / Double(count)
+            var currentX = 0.0
+            for _ in ribbon.columns {
+                result.append((x: currentX, width: colWidth))
+                currentX += colWidth + config.windowGap
+            }
+            return result
+        }
+
         var currentX = 0.0
         for col in ribbon.columns {
             let width = min(canvasWidth, col.widthRatio * canvasWidth)
@@ -46,6 +60,9 @@ public struct LayoutEngine: Sendable {
         canvasWidth: Double,
         config: Config
     ) -> Double {
+        if ribbon.isOverview {
+            return 0.0
+        }
         guard !ribbon.columns.isEmpty else { return 0.0 }
         let geometry = columnGeometry(for: ribbon, canvasWidth: canvasWidth, config: config)
         guard !geometry.isEmpty else { return 0.0 }

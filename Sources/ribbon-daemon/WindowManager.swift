@@ -5,6 +5,8 @@ import CoreGraphics
 
 private let displayReconfigurationCallback: CGDisplayReconfigurationCallBack = { _, flags, userInfo in
     guard let userInfo = userInfo else { return }
+    // Ignore the begin phase; wait until the end phase when hardware & WindowServer bounds are updated
+    if flags.contains(.beginConfigurationFlag) { return }
     let wm = Unmanaged<WindowManager>.fromOpaque(userInfo).takeUnretainedValue()
     if wm.isStopped { return }
     if flags.contains(.setModeFlag) || flags.contains(.addFlag) || flags.contains(.removeFlag) || flags.contains(.desktopShapeChangedFlag) {
@@ -27,6 +29,8 @@ public final class WindowManager: AXEventObserverDelegate {
     private var retileWork: DispatchWorkItem?
     private var resizeDebounceWork: DispatchWorkItem?
     private var spaceChangeWork: DispatchWorkItem?
+    private var displayReconfigWork: DispatchWorkItem?
+    private var screenParametersObserver: NSObjectProtocol?
     private var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     private var lastStashedState: [CGWindowID: Bool] = [:]
     private var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
@@ -88,6 +92,14 @@ public final class WindowManager: AXEventObserverDelegate {
             Unmanaged.passUnretained(self).toOpaque()
         )
 
+        screenParametersObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.displayConfigurationChanged()
+        }
+
         retile()
     }
 
@@ -110,6 +122,12 @@ public final class WindowManager: AXEventObserverDelegate {
         resizeDebounceWork = nil
         spaceChangeWork?.cancel()
         spaceChangeWork = nil
+        displayReconfigWork?.cancel()
+        displayReconfigWork = nil
+        if let obs = screenParametersObserver {
+            NotificationCenter.default.removeObserver(obs)
+            screenParametersObserver = nil
+        }
         observer.stop()
 
         var windowPID: [CGWindowID: pid_t] = [:]
@@ -142,8 +160,15 @@ public final class WindowManager: AXEventObserverDelegate {
     }
 
     func displayConfigurationChanged() {
-        lastAppliedFrames.removeAll()
-        scheduleRetile()
+        displayReconfigWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self, !self.isStopped else { return }
+            self.displayReconfigWork = nil
+            self.lastAppliedFrames.removeAll()
+            self.scheduleRetile()
+        }
+        displayReconfigWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200), execute: work)
     }
 
     // MARK: - Debounced Retile
@@ -391,6 +416,7 @@ public final class WindowManager: AXEventObserverDelegate {
             default: return "error: unknown focus direction"
             }
         case "swap":
+            ribbon.isOverview = false
             let dir = parts.dropFirst().first?.lowercased() ?? "right"
             switch dir {
             case "left", "h": ribbon.swapLeft()
@@ -400,11 +426,16 @@ public final class WindowManager: AXEventObserverDelegate {
             default: return "error: unknown swap direction"
             }
         case "cycle-width", "cycle":
+            ribbon.isOverview = false
             ribbon.cycleWidth(ratios: config.widthCycleRatios)
         case "slurp":
+            ribbon.isOverview = false
             ribbon.slurp()
         case "barf":
+            ribbon.isOverview = false
             ribbon.barf()
+        case "toggle-overview", "overview":
+            ribbon.toggleOverview()
         case "retile":
             retileWork?.cancel()
             retileWork = nil
@@ -416,7 +447,7 @@ public final class WindowManager: AXEventObserverDelegate {
             rescanAfterSpaceChange()
             return "ok"
         case "status":
-            return "columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex)"
+            return "columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview)"
         default:
             return "error: unknown command '\(command)'"
         }
@@ -717,6 +748,11 @@ public final class WindowManager: AXEventObserverDelegate {
         // evict this window's entry to force a fresh frame write next retile.
         lastAppliedFrames.removeValue(forKey: id)
 
+        let wasOverview = ribbon.isOverview
+        if wasOverview {
+            ribbon.isOverview = false
+        }
+
         // Update active column if focused window is tracked
         for (cIdx, col) in ribbon.columns.enumerated() {
             if let rIdx = col.windows.firstIndex(where: { $0.id == id }) {
@@ -725,6 +761,8 @@ public final class WindowManager: AXEventObserverDelegate {
                     var updatedCol = col
                     updatedCol.activeRowIndex = rIdx
                     ribbon.columns[cIdx] = updatedCol
+                    scheduleRetile()
+                } else if wasOverview {
                     scheduleRetile()
                 }
                 break

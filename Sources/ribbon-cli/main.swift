@@ -9,6 +9,7 @@ guard !arguments.isEmpty else {
       ribbon focus <left|right|up|down>
       ribbon swap <left|right|up|down>
       ribbon cycle-width (alias: cycle)
+      ribbon toggle-overview (alias: overview)
       ribbon slurp
       ribbon barf
       ribbon retile

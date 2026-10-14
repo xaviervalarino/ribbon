@@ -5,11 +5,13 @@ public struct Ribbon: Sendable, Codable {
     public var columns: [ColumnModel]
     public var activeColumnIndex: Int
     public var viewportOffset: Double
+    public var isOverview: Bool
 
-    public init(columns: [ColumnModel] = [], activeColumnIndex: Int = 0, viewportOffset: Double = 0) {
+    public init(columns: [ColumnModel] = [], activeColumnIndex: Int = 0, viewportOffset: Double = 0, isOverview: Bool = false) {
         self.columns = columns
         self.activeColumnIndex = activeColumnIndex
         self.viewportOffset = viewportOffset
+        self.isOverview = isOverview
     }
 
     public var activeColumn: ColumnModel? {
@@ -103,6 +105,10 @@ public struct Ribbon: Sendable, Codable {
             }
         }
         return false
+    }
+
+    public mutating func toggleOverview() {
+        isOverview.toggle()
     }
 
     public mutating func slurp() {
