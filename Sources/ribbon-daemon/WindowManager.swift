@@ -25,16 +25,25 @@ private let displayReconfigurationCallback: CGDisplayReconfigurationCallBack = {
 }
 
 public final class WindowManager: AXEventObserverDelegate {
-    public var ribbons: [CGDirectDisplayID: Ribbon] = [:]
+    public typealias SpaceID = UInt64
+    public var ribbons: [SpaceID: Ribbon] = [:]
+    public var activeSpaceID: SpaceID?
     public var activeDisplayID: CGDirectDisplayID?
+    private var displayBySpaceID: [SpaceID: CGDirectDisplayID] = [:]
+    private var spaceByWindowID: [CGWindowID: SpaceID] = [:]
     private var displayByWindowID: [CGWindowID: CGDirectDisplayID] = [:]
+
+    public func currentActiveSpaceID() -> SpaceID {
+        if let sID = SpaceManager.currentSpaceID() {
+            return sID
+        }
+        return UInt64(activeDisplayID ?? NSScreen.main?.displayID ?? 0)
+    }
 
     public var activeRibbon: Ribbon {
         get {
-            if let id = activeDisplayID, let r = ribbons[id] {
-                return r
-            }
-            if let id = NSScreen.main?.displayID, let r = ribbons[id] {
+            let sID = activeSpaceID ?? currentActiveSpaceID()
+            if let r = ribbons[sID] {
                 return r
             }
             if let first = ribbons.first {
@@ -43,9 +52,9 @@ public final class WindowManager: AXEventObserverDelegate {
             return Ribbon()
         }
         set {
-            let id = activeDisplayID ?? NSScreen.main?.displayID ?? NSScreen.screens.first?.displayID ?? 0
-            ribbons[id] = newValue
-            activeDisplayID = id
+            let sID = activeSpaceID ?? currentActiveSpaceID()
+            ribbons[sID] = newValue
+            activeSpaceID = sID
         }
     }
 
@@ -68,6 +77,9 @@ public final class WindowManager: AXEventObserverDelegate {
     private var retileWork: DispatchWorkItem?
     private var resizeDebounceWork: DispatchWorkItem?
     private var spaceChangeWork: DispatchWorkItem?
+    private var spaceSamplingTimer: DispatchSourceTimer?
+    private var spaceSamplingCount: Int = 0
+    private var lastSampledWindowIDs: Set<CGWindowID>?
     private var displayReconfigWork: DispatchWorkItem?
     private var screenParametersObserver: NSObjectProtocol?
     private var lastAppliedFrames: [CGWindowID: CGRect] = [:]
@@ -161,6 +173,8 @@ public final class WindowManager: AXEventObserverDelegate {
         resizeDebounceWork = nil
         spaceChangeWork?.cancel()
         spaceChangeWork = nil
+        spaceSamplingTimer?.cancel()
+        spaceSamplingTimer = nil
         displayReconfigWork?.cancel()
         displayReconfigWork = nil
         if let obs = screenParametersObserver {
@@ -204,18 +218,24 @@ public final class WindowManager: AXEventObserverDelegate {
 
             let activeIDs = Set(NSScreen.screens.map { $0.displayID })
             let primaryID = NSScreen.main?.displayID ?? NSScreen.screens.first?.displayID ?? 0
+            let primarySID = self.activeSpaceID ?? self.currentActiveSpaceID()
 
-            // Migrate any windows from disconnected displays to the primary display
-            for (dID, r) in self.ribbons where !activeIDs.contains(dID) {
-                for col in r.columns {
-                    for win in col.windows {
-                        var primaryR = self.ribbons[primaryID] ?? Ribbon()
-                        primaryR.addWindow(win, config: self.config)
-                        self.ribbons[primaryID] = primaryR
-                        self.displayByWindowID[win.id] = primaryID
+            // Migrate any windows from disconnected displays to the primary space
+            for (sID, r) in self.ribbons {
+                let dID = self.displayBySpaceID[sID] ?? 0
+                if dID != 0 && !activeIDs.contains(dID) {
+                    for col in r.columns {
+                        for win in col.windows {
+                            var primaryR = self.ribbons[primarySID] ?? Ribbon()
+                            primaryR.addWindow(win, config: self.config)
+                            self.ribbons[primarySID] = primaryR
+                            self.displayByWindowID[win.id] = primaryID
+                            self.spaceByWindowID[win.id] = primarySID
+                        }
                     }
+                    self.ribbons.removeValue(forKey: sID)
+                    self.displayBySpaceID.removeValue(forKey: sID)
                 }
-                self.ribbons.removeValue(forKey: dID)
             }
 
             if self.activeDisplayID == nil || !activeIDs.contains(self.activeDisplayID!) {
@@ -265,6 +285,9 @@ public final class WindowManager: AXEventObserverDelegate {
 
     private func discoverExistingWindows() {
         let onScreen = onScreenWindowIDs()
+        let currentSID = currentActiveSpaceID()
+        activeSpaceID = currentSID
+
         var discovered: [(win: AXElement, id: CGWindowID, pid: pid_t, appName: String, bundleId: String?, x: CGFloat, frame: CGRect)] = []
 
         for app in NSWorkspace.shared.runningApplications {
@@ -289,12 +312,15 @@ public final class WindowManager: AXEventObserverDelegate {
 
         discovered.sort { $0.x < $1.x }
 
+        var r = ribbons[currentSID] ?? Ribbon()
         for entry in discovered {
             trackedWindows[entry.id] = entry.win
             windowIDsByElement[entry.win.rawElement] = entry.id
             let targetScreen = screen(forFrame: entry.frame) ?? NSScreen.main ?? NSScreen.screens.first
             let dID = targetScreen?.displayID ?? 0
             displayByWindowID[entry.id] = dID
+            spaceByWindowID[entry.id] = currentSID
+            displayBySpaceID[currentSID] = dID
 
             let model = WindowModel(
                 id: entry.id,
@@ -303,13 +329,11 @@ public final class WindowManager: AXEventObserverDelegate {
                 title: entry.win.title,
                 appName: entry.appName
             )
-            var r = ribbons[dID] ?? Ribbon()
             r.addWindow(model, config: config)
-            ribbons[dID] = r
-
             observer.observeWindow(element: entry.win, pid: entry.pid)
             adoptedSinceLastSweep.insert(entry.id)
         }
+        ribbons[currentSID] = r
 
         if let frontApp = NSWorkspace.shared.frontmostApplication,
            let focusedWin = AXElement.application(pid: frontApp.processIdentifier).focusedWindow,
@@ -361,9 +385,13 @@ public final class WindowManager: AXEventObserverDelegate {
 
         var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
 
-        for screen in NSScreen.screens {
-            let dID = screen.displayID
-            guard var r = ribbons[dID], !r.columns.isEmpty else { continue }
+        let activeSpaces = SpaceManager.activeSpaces()
+        let spacesToTile = activeSpaces.isEmpty ? [currentActiveSpaceID()] : activeSpaces
+
+        for sID in spacesToTile {
+            guard var r = ribbons[sID], !r.columns.isEmpty else { continue }
+            let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
+            guard let screen = screen(forDisplayID: dID) else { continue }
 
             let cocoaFrame = screen.visibleFrame
             let windowServerFrame = CGRect(
@@ -389,7 +417,7 @@ public final class WindowManager: AXEventObserverDelegate {
 
             let canvasW = windowServerFrame.width - (config.edgeMargin * 2)
             r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config)
-            ribbons[dID] = r
+            ribbons[sID] = r
 
             let plan = LayoutEngine.computePlan(
                 for: r,
@@ -472,9 +500,12 @@ public final class WindowManager: AXEventObserverDelegate {
     // MARK: - IPC Command Handling
 
     public func handleCommand(_ command: String) -> String {
-        if spaceChangeWork != nil {
+        if spaceChangeWork != nil || spaceSamplingTimer != nil {
             spaceChangeWork?.cancel()
             spaceChangeWork = nil
+            spaceSamplingTimer?.cancel()
+            spaceSamplingTimer = nil
+            lastSampledWindowIDs = nil
             rescanAfterSpaceChange()
         }
 
@@ -529,7 +560,9 @@ public final class WindowManager: AXEventObserverDelegate {
             }
             let targetDID = screens[nextIdx].displayID
             activeDisplayID = targetDID
-            if let win = ribbons[targetDID]?.activeWindow, let elem = trackedWindows[win.id] {
+            let targetSID = displayBySpaceID.first(where: { $0.value == targetDID })?.key ?? UInt64(targetDID)
+            activeSpaceID = targetSID
+            if let win = ribbons[targetSID]?.activeWindow, let elem = trackedWindows[win.id] {
                 pendingFocusEchoes[win.id] = .now() + .milliseconds(150)
                 NSRunningApplication(processIdentifier: win.pid)?.activate()
                 elem.focus()
@@ -538,9 +571,10 @@ public final class WindowManager: AXEventObserverDelegate {
         case "move-to-display":
             let screens = NSScreen.screens
             guard screens.count > 1 else { return "ok" }
-            guard let currentDID = activeDisplayID ?? NSScreen.main?.displayID,
-                  var currentR = ribbons[currentDID],
+            let currentSID = activeSpaceID ?? currentActiveSpaceID()
+            guard var currentR = ribbons[currentSID],
                   let activeWin = currentR.activeWindow else { return "ok" }
+            let currentDID = activeDisplayID ?? NSScreen.main?.displayID ?? 0
 
             let currentIdx = screens.firstIndex(where: { $0.displayID == currentDID }) ?? 0
             let arg = parts.dropFirst().first?.lowercased() ?? "next"
@@ -553,16 +587,20 @@ public final class WindowManager: AXEventObserverDelegate {
                 nextIdx = (currentIdx + 1) % screens.count
             }
             let targetDID = screens[nextIdx].displayID
+            let targetSID = displayBySpaceID.first(where: { $0.value == targetDID })?.key ?? UInt64(targetDID)
 
             currentR.removeWindow(id: activeWin.id)
-            ribbons[currentDID] = currentR
+            ribbons[currentSID] = currentR
 
-            var targetR = ribbons[targetDID] ?? Ribbon()
+            var targetR = ribbons[targetSID] ?? Ribbon()
             targetR.addWindow(activeWin, config: config, activate: true)
-            ribbons[targetDID] = targetR
+            ribbons[targetSID] = targetR
 
             displayByWindowID[activeWin.id] = targetDID
+            spaceByWindowID[activeWin.id] = targetSID
+            displayBySpaceID[targetSID] = targetDID
             activeDisplayID = targetDID
+            activeSpaceID = targetSID
 
             retileWork?.cancel()
             retileWork = nil
@@ -582,7 +620,8 @@ public final class WindowManager: AXEventObserverDelegate {
         case "status":
             let dCount = NSScreen.screens.count
             let actD = activeDisplayID ?? 0
-            return "screens: \(dCount), active_display: \(actD), columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview)"
+            let actS = currentActiveSpaceID()
+            return "screens: \(dCount), display: \(actD), space: \(actS), columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview)"
         default:
             return "error: unknown command '\(command)'"
         }
@@ -621,10 +660,13 @@ public final class WindowManager: AXEventObserverDelegate {
         let f = element.frame ?? CGRect.zero
         let targetScreen = screen(forFrame: f) ?? NSScreen.main ?? NSScreen.screens.first
         let dID = targetScreen?.displayID ?? 0
+        let sID = currentActiveSpaceID()
 
         trackedWindows[id] = element
         windowIDsByElement[element.rawElement] = id
         displayByWindowID[id] = dID
+        spaceByWindowID[id] = sID
+        displayBySpaceID[sID] = dID
 
         let model = WindowModel(
             id: id,
@@ -633,12 +675,13 @@ public final class WindowManager: AXEventObserverDelegate {
             title: element.title,
             appName: appName
         )
-        var r = ribbons[dID] ?? Ribbon()
+        var r = ribbons[sID] ?? Ribbon()
         r.addWindow(model, config: config, activate: activate)
-        ribbons[dID] = r
+        ribbons[sID] = r
 
         if activate || activeDisplayID == nil {
             activeDisplayID = dID
+            activeSpaceID = sID
         }
         observer.observeWindow(element: element, pid: pid)
         adoptedSinceLastSweep.insert(id)
@@ -655,11 +698,12 @@ public final class WindowManager: AXEventObserverDelegate {
         }
         lastAppliedFrames.removeValue(forKey: id)
         lastStashedState.removeValue(forKey: id)
-        if let dID = displayByWindowID.removeValue(forKey: id) {
-            ribbons[dID]?.removeWindow(id: id)
+        displayByWindowID.removeValue(forKey: id)
+        if let sID = spaceByWindowID.removeValue(forKey: id) {
+            ribbons[sID]?.removeWindow(id: id)
         } else {
-            for dID in ribbons.keys {
-                ribbons[dID]?.removeWindow(id: id)
+            for sID in ribbons.keys {
+                ribbons[sID]?.removeWindow(id: id)
             }
         }
     }
@@ -691,7 +735,10 @@ public final class WindowManager: AXEventObserverDelegate {
     }
 
     private func rescanAfterSpaceChange() {
-        let onScreen = onScreenWindowIDs()
+        guard let onScreen = onScreenWindowIDs() else { return }
+        let currentSID = currentActiveSpaceID()
+        activeSpaceID = currentSID
+
         // 1. Build the set of currently-visible admitted window ids
         var visibleIDs = Set<CGWindowID>()
         var candidateWindows: [(win: AXElement, id: CGWindowID, pid: pid_t, x: CGFloat)] = []
@@ -706,7 +753,7 @@ public final class WindowManager: AXEventObserverDelegate {
             let appElem = AXElement.application(pid: pid)
             for win in appElem.windows {
                 guard admits(win), let id = win.windowID else { continue }
-                if let onScreen = onScreen, !onScreen.contains(id) { continue }
+                if !onScreen.contains(id) { continue }
                 if visibleIDs.insert(id).inserted {
                     let x = win.position?.x ?? 0
                     candidateWindows.append((win: win, id: id, pid: pid, x: x))
@@ -714,42 +761,47 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
-        // 2. Remove: every ribbon window whose id is NOT in that visible set (removeFromRibbon)
-        let currentRibbonIDs = allRibbonWindows.map(\.id)
+        var r = ribbons[currentSID] ?? Ribbon()
+
+        // 2. Prune only windows from THIS space's ribbon that are dead/closed
+        let currentRibbonIDs = r.columns.flatMap { $0.windows }.map(\.id)
         for id in currentRibbonIDs {
             if !visibleIDs.contains(id) {
-                removeFromRibbon(id: id)
+                r.removeWindow(id: id)
+                spaceByWindowID.removeValue(forKey: id)
             }
         }
 
-        // 3. Add: every visible admitted window whose id is NOT yet tracked — sort these new ones by x-position ascending, adopt(activate: false) each
+        // 3. Add any newly visible windows not yet in this space's ribbon
+        let existingIDs = Set(r.columns.flatMap { $0.windows }.map(\.id))
         let newWindows = candidateWindows
-            .filter { trackedWindows[$0.id] == nil }
+            .filter { !existingIDs.contains($0.id) }
             .sorted { $0.x < $1.x }
         for entry in newWindows {
             adopt(element: entry.win, pid: entry.pid, activate: false)
         }
 
+        r = ribbons[currentSID] ?? r
+
         // 4. Sync active display and active column to frontmost window on the new Space
         if let frontApp = NSWorkspace.shared.frontmostApplication {
             let frontElem = AXElement.application(pid: frontApp.processIdentifier)
             if let focusedWin = frontElem.focusedWindow, let focusedID = focusedWin.windowID {
-                if let dID = displayByWindowID[focusedID] {
-                    activeDisplayID = dID
-                    if var r = ribbons[dID] {
-                        for (colIdx, col) in r.columns.enumerated() {
-                            if let rowIdx = col.windows.firstIndex(where: { $0.id == focusedID }) {
-                                r.activeColumnIndex = colIdx
-                                var c = col
-                                c.activeRowIndex = rowIdx
-                                r.columns[colIdx] = c
-                                ribbons[dID] = r
-                                break
-                            }
-                        }
+                for (colIdx, col) in r.columns.enumerated() {
+                    if let rowIdx = col.windows.firstIndex(where: { $0.id == focusedID }) {
+                        r.activeColumnIndex = colIdx
+                        var c = col
+                        c.activeRowIndex = rowIdx
+                        r.columns[colIdx] = c
+                        ribbons[currentSID] = r
+                        break
                     }
                 }
             }
+        }
+
+        if let dID = displayBySpaceID[currentSID] {
+            activeDisplayID = dID
         }
 
         // 5. retile()
@@ -853,6 +905,7 @@ public final class WindowManager: AXEventObserverDelegate {
         }
 
         guard let newSize = element.size else { return }
+        let sID = spaceByWindowID[id] ?? activeSpaceID ?? currentActiveSpaceID()
         let dID = displayByWindowID[id] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
         guard let screen = screen(forDisplayID: dID) else { return }
 
@@ -868,9 +921,9 @@ public final class WindowManager: AXEventObserverDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.resizeDebounceWork = nil
-            if var r = self.ribbons[dID] {
+            if var r = self.ribbons[sID] {
                 if r.setWidthRatio(ratio, forWindowID: id) {
-                    self.ribbons[dID] = r
+                    self.ribbons[sID] = r
                     self.lastAppliedFrames.removeValue(forKey: id)
                     self.scheduleRetile()
                 }
@@ -902,18 +955,23 @@ public final class WindowManager: AXEventObserverDelegate {
             if let newScreen = screen(forFrame: currentFrame) {
                 let newDID = newScreen.displayID
                 if let oldDID = displayByWindowID[id], oldDID != newDID {
-                    if var oldR = ribbons[oldDID] {
+                    let oldSID = spaceByWindowID[id] ?? currentActiveSpaceID()
+                    if var oldR = ribbons[oldSID] {
                         if let col = oldR.columns.first(where: { $0.windows.contains(where: { $0.id == id }) }),
                            let winModel = col.windows.first(where: { $0.id == id }) {
                             oldR.removeWindow(id: id)
-                            ribbons[oldDID] = oldR
+                            ribbons[oldSID] = oldR
 
-                            var newR = ribbons[newDID] ?? Ribbon()
+                            let newSID = currentActiveSpaceID()
+                            var newR = ribbons[newSID] ?? Ribbon()
                             newR.addWindow(winModel, config: config, activate: true)
-                            ribbons[newDID] = newR
+                            ribbons[newSID] = newR
 
                             displayByWindowID[id] = newDID
+                            spaceByWindowID[id] = newSID
+                            displayBySpaceID[newSID] = newDID
                             activeDisplayID = newDID
+                            activeSpaceID = newSID
                             scheduleRetile()
                             return
                         }
@@ -941,18 +999,18 @@ public final class WindowManager: AXEventObserverDelegate {
         // evict this window's entry to force a fresh frame write next retile.
         lastAppliedFrames.removeValue(forKey: id)
 
-        var foundDisplayID = displayByWindowID[id]
-        if foundDisplayID == nil {
-            for (dID, r) in ribbons {
+        var foundSpaceID = spaceByWindowID[id]
+        if foundSpaceID == nil {
+            for (sID, r) in ribbons {
                 if r.columns.contains(where: { $0.windows.contains(where: { $0.id == id }) }) {
-                    foundDisplayID = dID
-                    displayByWindowID[id] = dID
+                    foundSpaceID = sID
+                    spaceByWindowID[id] = sID
                     break
                 }
             }
         }
 
-        if foundDisplayID == nil {
+        if foundSpaceID == nil {
             if let onScreen = onScreenWindowIDs(), onScreen.contains(id), admits(element) {
                 if adopt(element: element, pid: pid, activate: true) {
                     scheduleRetile()
@@ -961,8 +1019,11 @@ public final class WindowManager: AXEventObserverDelegate {
             }
         }
 
-        if let dID = foundDisplayID, var r = ribbons[dID] {
-            activeDisplayID = dID
+        if let sID = foundSpaceID, var r = ribbons[sID] {
+            activeSpaceID = sID
+            if let dID = displayBySpaceID[sID] {
+                activeDisplayID = dID
+            }
             let wasOverview = r.isOverview
             if wasOverview {
                 r.isOverview = false
@@ -976,10 +1037,10 @@ public final class WindowManager: AXEventObserverDelegate {
                         var updatedCol = col
                         updatedCol.activeRowIndex = rIdx
                         r.columns[cIdx] = updatedCol
-                        ribbons[dID] = r
+                        ribbons[sID] = r
                         scheduleRetile()
                     } else if wasOverview {
-                        ribbons[dID] = r
+                        ribbons[sID] = r
                         scheduleRetile()
                     }
                     break
@@ -992,6 +1053,34 @@ public final class WindowManager: AXEventObserverDelegate {
         if let focused = AXElement.application(pid: pid).focusedWindow {
             windowFocused(element: focused, pid: pid)
         }
+    }
+
+    private func handleSpaceChangeStability() {
+        spaceSamplingTimer?.cancel()
+        spaceSamplingCount = 0
+        lastSampledWindowIDs = nil
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(35), repeating: .milliseconds(35))
+        timer.setEventHandler { [weak self] in
+            guard let self else { return }
+            self.spaceSamplingCount += 1
+            let current = self.onScreenWindowIDs()
+
+            let isStable = current != nil && !current!.isEmpty && current == self.lastSampledWindowIDs
+            let isTimeout = self.spaceSamplingCount >= 6
+
+            if isStable || isTimeout {
+                self.spaceSamplingTimer?.cancel()
+                self.spaceSamplingTimer = nil
+                self.lastSampledWindowIDs = nil
+                self.rescanAfterSpaceChange()
+            } else {
+                self.lastSampledWindowIDs = current
+            }
+        }
+        spaceSamplingTimer = timer
+        timer.resume()
     }
 
     public func applicationEventOccurred(kind: AppEventKind, pid: pid_t?) {
@@ -1013,16 +1102,7 @@ public final class WindowManager: AXEventObserverDelegate {
             }
             scheduleRetile()
         case .spaceChanged:
-            spaceChangeWork?.cancel()
-            let work = DispatchWorkItem { [weak self] in
-                self?.spaceChangeWork = nil
-                self?.rescanAfterSpaceChange()
-            }
-            spaceChangeWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(config.spaceChangeDebounceMs), execute: work)
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(max(150, config.spaceChangeDebounceMs + 100))) { [weak self] in
-                self?.rescanAfterSpaceChange()
-            }
+            handleSpaceChangeStability()
         }
     }
 
