@@ -41,7 +41,7 @@ public final class SocketServer {
 
         // Probe for a live daemon before unlinking, retrying briefly if an exiting instance is closing
         var isAlive = false
-        for attempt in 0..<3 {
+        for attempt in 0..<10 {
             let probeFD = socket(AF_UNIX, SOCK_STREAM, 0)
             if probeFD >= 0 {
                 var probeAddr = Self.makeAddress(socketPath)
@@ -53,8 +53,8 @@ public final class SocketServer {
                 close(probeFD)
                 if connectResult == 0 {
                     isAlive = true
-                    if attempt < 2 {
-                        usleep(150_000) // 150ms backoff in case old process is in mid-exit
+                    if attempt < 9 {
+                        usleep(100_000) // 100ms backoff in case old process is in mid-exit
                         continue
                     }
                 } else {

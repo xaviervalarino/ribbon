@@ -16,6 +16,7 @@ guard !arguments.isEmpty else {
       ribbon barf
       ribbon retile
       ribbon rescan
+      ribbon restart
       ribbon status
     """)
     exit(0)
@@ -55,6 +56,15 @@ let connectResult = withUnsafePointer(to: &addr) {
 }
 
 guard connectResult == 0 else {
+    if command == "restart" {
+        close(clientFD)
+        print("[ribbon] daemon not running; launching Ribbon.app...")
+        let task = Process()
+        task.launchPath = "/usr/bin/open"
+        task.arguments = ["bin/Ribbon.app"]
+        try? task.run()
+        exit(0)
+    }
     fputs("error: ribbon-daemon is not running (cannot connect to \(socketPath))\n", stderr)
     close(clientFD)
     exit(1)

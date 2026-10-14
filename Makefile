@@ -5,9 +5,12 @@ DAEMON_SOURCES := $(wildcard Sources/RibbonCore/*.swift) \
                   $(wildcard Sources/RibbonAccessibility/*.swift) \
                   $(wildcard Sources/ribbon-daemon/*.swift)
 
-.PHONY: all cli daemon bundle clean
+.PHONY: all cli daemon bundle clean restart
 
 all: cli daemon bundle
+
+restart: bundle
+	@bin/ribbon restart 2>/dev/null || open bin/Ribbon.app
 
 cli: bin/ribbon
 

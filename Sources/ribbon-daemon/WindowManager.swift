@@ -157,8 +157,9 @@ public final class WindowManager: AXEventObserverDelegate {
         }
     }
 
-    public func stop() {
+    public func stop(forRestart: Bool = false) {
         isStopped = true
+        socketServer.stop()
         gcTimer?.cancel()
         gcTimer = nil
         retileWork?.cancel()
@@ -175,31 +176,40 @@ public final class WindowManager: AXEventObserverDelegate {
         }
         observer.stop()
 
-        var windowPID: [CGWindowID: pid_t] = [:]
-        for win in allRibbonWindows {
-            windowPID[win.id] = win.pid
-        }
+        if !forRestart {
+            var windowPID: [CGWindowID: pid_t] = [:]
+            for win in allRibbonWindows {
+                windowPID[win.id] = win.pid
+            }
 
-        var restoreFrames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
-        for (id, _) in trackedWindows {
-            guard let pid = windowPID[id], let orig = originalFrames[id] else { continue }
-            restoreFrames.append((id: id, pid: pid, frame: orig, isStashed: false))
-        }
+            var restoreFrames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
+            for (id, _) in trackedWindows {
+                guard let pid = windowPID[id], let orig = originalFrames[id] else { continue }
+                restoreFrames.append((id: id, pid: pid, frame: orig, isStashed: false))
+            }
 
-        // The diff cache may be stale (manual drags); never skip restores.
-        lastAppliedFrames.removeAll()
-        applyFrames(restoreFrames)
+            // The diff cache may be stale (manual drags); never skip restores.
+            lastAppliedFrames.removeAll()
+            applyFrames(restoreFrames)
 
-        if FileManager.default.fileExists(atPath: restoreFramesURL.path) {
-            try? FileManager.default.removeItem(at: restoreFramesURL)
+            if FileManager.default.fileExists(atPath: restoreFramesURL.path) {
+                try? FileManager.default.removeItem(at: restoreFramesURL)
+            }
         }
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,
             Unmanaged.passUnretained(self).toOpaque()
         )
+    }
 
-        socketServer.stop()
+    public func restart() {
+        print("[ribbon-daemon] In-place restart requested...")
+        stop(forRestart: true)
+        let execPath = Bundle.main.executablePath ?? CommandLine.arguments[0]
+        let cArgs = CommandLine.arguments.map { strdup($0) } + [nil]
+        execv(execPath, cArgs)
+        exit(1)
     }
 
     func displayConfigurationChanged() {
@@ -309,7 +319,7 @@ public final class WindowManager: AXEventObserverDelegate {
             windowIDsByElement[entry.win.rawElement] = entry.id
             let targetScreen = screen(forFrame: entry.frame) ?? NSScreen.main ?? NSScreen.screens.first
             let dID = targetScreen?.displayID ?? 0
-            let sID = SpaceManager.space(forWindowID: entry.id) ?? currentActiveSpaceID(forDisplayID: dID)
+            let sID = currentActiveSpaceID(forDisplayID: dID)
             displayByWindowID[entry.id] = dID
             spaceByWindowID[entry.id] = sID
             displayBySpaceID[sID] = dID
@@ -333,7 +343,20 @@ public final class WindowManager: AXEventObserverDelegate {
            let fID = focusedWin.windowID,
            let dID = displayByWindowID[fID] {
             activeDisplayID = dID
-            activeSpaceID = spaceByWindowID[fID] ?? currentActiveSpaceID(forDisplayID: dID)
+            let sID = spaceByWindowID[fID] ?? currentActiveSpaceID(forDisplayID: dID)
+            activeSpaceID = sID
+            if var r = ribbons[sID] {
+                for (colIdx, col) in r.columns.enumerated() {
+                    if let rowIdx = col.windows.firstIndex(where: { $0.id == fID }) {
+                        r.activeColumnIndex = colIdx
+                        var c = col
+                        c.activeRowIndex = rowIdx
+                        r.columns[colIdx] = c
+                        ribbons[sID] = r
+                        break
+                    }
+                }
+            }
         } else {
             let dID = NSScreen.main?.displayID ?? NSScreen.screens.first?.displayID ?? 0
             activeDisplayID = dID
@@ -625,6 +648,11 @@ public final class WindowManager: AXEventObserverDelegate {
             let actD = activeDisplayID ?? 0
             let actS = currentActiveSpaceID()
             return "screens: \(dCount), display: \(actD), space: \(actS), columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview)"
+        case "restart":
+            DispatchQueue.main.async { [weak self] in
+                self?.restart()
+            }
+            return "restarting"
         default:
             return "error: unknown command '\(command)'"
         }
@@ -664,7 +692,7 @@ public final class WindowManager: AXEventObserverDelegate {
         let f = element.frame ?? CGRect.zero
         let targetScreen = screen(forFrame: f) ?? NSScreen.main ?? NSScreen.screens.first
         let dID = targetScreen?.displayID ?? 0
-        let sID = SpaceManager.space(forWindowID: id) ?? currentActiveSpaceID(forDisplayID: dID)
+        let sID = currentActiveSpaceID(forDisplayID: dID)
 
         trackedWindows[id] = element
         windowIDsByElement[element.rawElement] = id
@@ -750,8 +778,7 @@ public final class WindowManager: AXEventObserverDelegate {
         var candidateWindows: [(win: AXElement, id: CGWindowID, pid: pid_t, x: CGFloat)] = []
 
         for app in NSWorkspace.shared.runningApplications {
-            guard app.activationPolicy == .regular,
-                  !app.isHidden,
+            guard !app.isHidden,
                   let appName = app.localizedName,
                   !config.ignoredApps.contains(appName) else { continue }
 
@@ -762,9 +789,6 @@ public final class WindowManager: AXEventObserverDelegate {
                 if !onScreen.contains(id) { continue }
                 let frame = win.frame ?? .zero
                 if let winScreen = screen(forFrame: frame), winScreen.displayID != currentDID {
-                    continue
-                }
-                if let winSpace = SpaceManager.space(forWindowID: id), winSpace != currentSID {
                     continue
                 }
                 if visibleIDs.insert(id).inserted {
