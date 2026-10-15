@@ -218,7 +218,9 @@ public final class AXEventObserver {
         let windowNotifs = [
             kAXUIElementDestroyedNotification,
             kAXResizedNotification,
-            kAXMovedNotification
+            kAXWindowResizedNotification,
+            kAXMovedNotification,
+            kAXWindowMovedNotification
         ]
         for notif in windowNotifs {
             AXObserverAddNotification(obs, element, notif as CFString, refcon)

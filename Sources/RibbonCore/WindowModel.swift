@@ -30,17 +30,20 @@ public struct ColumnModel: Identifiable, Equatable, Sendable, Codable {
     public let id: UUID
     public var windows: [WindowModel]
     public var widthRatio: Double
+    public var hasExplicitSingleWidth: Bool
     public var activeRowIndex: Int
 
     public init(
         id: UUID = UUID(),
         windows: [WindowModel] = [],
         widthRatio: Double = 0.5,
+        hasExplicitSingleWidth: Bool = false,
         activeRowIndex: Int = 0
     ) {
         self.id = id
         self.windows = windows
         self.widthRatio = widthRatio
+        self.hasExplicitSingleWidth = hasExplicitSingleWidth
         self.activeRowIndex = activeRowIndex
     }
 

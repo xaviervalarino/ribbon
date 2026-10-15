@@ -10,7 +10,7 @@ DAEMON_SOURCES := $(wildcard Sources/RibbonCore/*.swift) \
 all: cli daemon bundle
 
 restart: cli bundle
-	@bin/ribbon restart
+	bin/ribbon restart
 
 cli: bin/ribbon
 

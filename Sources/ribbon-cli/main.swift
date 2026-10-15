@@ -7,7 +7,7 @@ guard !arguments.isEmpty else {
 
     Usage:
       ribbon focus <left|right|up|down>
-      ribbon swap <left|right|up|down>
+      ribbon swap <left|right|up|down> (alias: move)
       ribbon cycle-width (alias: cycle)
       ribbon toggle-overview (alias: overview)
       ribbon focus-display [next|prev|<index>]
@@ -17,6 +17,7 @@ guard !arguments.isEmpty else {
       ribbon retile
       ribbon rescan
       ribbon restart
+      ribbon quit (alias: stop)
       ribbon status
     """)
     exit(0)
@@ -69,7 +70,8 @@ guard connectResult == 0 else {
         task.launchPath = "/usr/bin/open"
         task.arguments = [appPath]
         try? task.run()
-        exit(0)
+        task.waitUntilExit()
+        exit(task.terminationStatus)
     }
     fputs("error: ribbon-daemon is not running (cannot connect to \(socketPath))\n", stderr)
     close(clientFD)

@@ -87,12 +87,20 @@ public struct Ribbon: Sendable, Codable {
 
     public mutating func cycleWidth(ratios: [Double]) {
         guard columns.indices.contains(activeColumnIndex) else { return }
-        let currentRatio = columns[activeColumnIndex].widthRatio
-        if let idx = ratios.firstIndex(where: { abs($0 - currentRatio) < 0.01 }) {
+        let isSingleAutoExpanded = (columns.count == 1 && !columns[0].hasExplicitSingleWidth)
+        let effectiveCurrentRatio = isSingleAutoExpanded ? 1.0 : columns[activeColumnIndex].widthRatio
+
+        let nextRatio: Double
+        if let idx = ratios.firstIndex(where: { abs($0 - effectiveCurrentRatio) < 0.01 }) {
             let nextIndex = (idx + 1) % ratios.count
-            columns[activeColumnIndex].widthRatio = ratios[nextIndex]
+            nextRatio = ratios[nextIndex]
         } else {
-            columns[activeColumnIndex].widthRatio = ratios.first ?? 0.5
+            nextRatio = ratios.first ?? 0.5
+        }
+
+        columns[activeColumnIndex].widthRatio = nextRatio
+        if columns.count == 1 {
+            columns[activeColumnIndex].hasExplicitSingleWidth = (abs(nextRatio - 1.0) >= 0.01)
         }
     }
 
@@ -101,6 +109,9 @@ public struct Ribbon: Sendable, Codable {
         for (cIdx, col) in columns.enumerated() {
             if col.windows.contains(where: { $0.id == id }) {
                 columns[cIdx].widthRatio = ratio
+                if columns.count == 1 {
+                    columns[cIdx].hasExplicitSingleWidth = (ratio < 0.98)
+                }
                 return true
             }
         }
@@ -158,7 +169,13 @@ public struct Ribbon: Sendable, Codable {
         return false
     }
 
-    public mutating func addWindow(_ window: WindowModel, config: Config, activate: Bool = true, at index: Int? = nil) {
+    public mutating func addWindow(
+        _ window: WindowModel,
+        config: Config,
+        activate: Bool = true,
+        at index: Int? = nil,
+        initialWidthRatio: Double? = nil
+    ) {
         // Check if window is already tracked
         for (cIdx, col) in columns.enumerated() {
             if let rIdx = col.windows.firstIndex(where: { $0.id == window.id }) {
@@ -170,13 +187,26 @@ public struct Ribbon: Sendable, Codable {
             }
         }
 
-        let ratio = config.appWidthRatios[window.appName] ?? config.defaultWidthRatio
-        let newColumn = ColumnModel(windows: [window], widthRatio: ratio)
+        let defaultRatio = config.appWidthRatios[window.appName] ?? config.defaultWidthRatio
+        let rawRatio = initialWidthRatio ?? defaultRatio
+        let ratio = (initialWidthRatio != nil && rawRatio >= 0.95) ? defaultRatio : rawRatio
+        let newColumn = ColumnModel(
+            windows: [window],
+            widthRatio: ratio,
+            hasExplicitSingleWidth: initialWidthRatio != nil && rawRatio < 0.95
+        )
 
         if columns.isEmpty {
             columns.append(newColumn)
             activeColumnIndex = 0
         } else {
+            if columns.count == 1 {
+                columns[0].hasExplicitSingleWidth = false
+                if columns[0].widthRatio >= 0.95 {
+                    let firstApp = columns[0].windows.first?.appName ?? ""
+                    columns[0].widthRatio = config.appWidthRatios[firstApp] ?? config.defaultWidthRatio
+                }
+            }
             let insertIndex: Int
             if let idx = index {
                 insertIndex = min(max(0, idx), columns.count)
@@ -200,6 +230,8 @@ public struct Ribbon: Sendable, Codable {
                     columns.remove(at: cIdx)
                     if cIdx < activeColumnIndex {
                         activeColumnIndex -= 1
+                    } else if cIdx == activeColumnIndex {
+                        activeColumnIndex = max(0, cIdx - 1)
                     } else if activeColumnIndex >= columns.count {
                         activeColumnIndex = max(0, columns.count - 1)
                     }

@@ -46,9 +46,22 @@ public struct LayoutEngine: Sendable {
             return result
         }
 
+        if ribbon.columns.count == 1 {
+            let col = ribbon.columns[0]
+            let effectiveRatio = col.hasExplicitSingleWidth ? col.widthRatio : 1.0
+            let width = min(canvasWidth, effectiveRatio * canvasWidth)
+            return [(x: 0.0, width: width)]
+        }
+
         var currentX = 0.0
         for col in ribbon.columns {
-            let width = min(canvasWidth, col.widthRatio * canvasWidth)
+            let width: Double
+            if col.widthRatio >= 0.999 {
+                width = canvasWidth
+            } else {
+                let rawWidth = col.widthRatio * (canvasWidth + config.windowGap) - config.windowGap
+                width = max(50.0, min(canvasWidth, rawWidth))
+            }
             result.append((x: currentX, width: width))
             currentX += width + config.windowGap
         }
@@ -104,8 +117,8 @@ public struct LayoutEngine: Sendable {
 
         for (index, col) in ribbon.columns.enumerated() {
             let geo = geometry[index]
-            let colX = canvasX + geo.x - ribbon.viewportOffset
-            let colW = geo.width
+            var colX = canvasX + geo.x - ribbon.viewportOffset
+            var colW = geo.width
 
             let leftEdge = colX
             let rightEdge = colX + colW
@@ -113,12 +126,14 @@ public struct LayoutEngine: Sendable {
             let isStashed: Bool
             if rightEdge <= canvasX || leftEdge >= canvasRight {
                 isStashed = true
-            } else if leftEdge < canvasX && !allowLeftBleed {
-                isStashed = true
-            } else if rightEdge > canvasRight && !allowRightBleed {
-                isStashed = true
             } else {
                 isStashed = false
+                if leftEdge < canvasX && !allowLeftBleed {
+                    colW = max(50.0, rightEdge - canvasX)
+                    colX = canvasX
+                } else if rightEdge > canvasRight && !allowRightBleed {
+                    colW = max(50.0, canvasRight - colX)
+                }
             }
 
             placements.append(contentsOf: layoutColumn(
