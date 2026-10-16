@@ -296,6 +296,7 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func applicationTerminated(pid: pid_t) {
+        removeAppDriver(for: pid)
         let matchingIDs = Set(allRibbonWindows.filter { $0.pid == pid }.map { $0.id })
         for id in matchingIDs {
             trackedWindows.removeValue(forKey: id)

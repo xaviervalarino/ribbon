@@ -138,8 +138,11 @@ extension WindowManager {
         applyFrames(framesToApply)
     }
 
+    /// Groups window mutations by target process and dispatches them asynchronously
+    /// to per-PID AppDriver actors, keeping the main thread free from AX IPC stalls.
     func applyFrames(_ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)]) {
-        var placementsByPID: [pid_t: [(elem: AXElement, id: CGWindowID, frame: CGRect, needsFullFrame: Bool)]] = [:]
+        var mutationsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
+
         for entry in frames {
             var elem = trackedWindows[entry.id]
             if elem == nil {
@@ -157,61 +160,37 @@ extension WindowManager {
                 continue
             }
 
-            let actualPos = elem.position
-            let actualSize = elem.size
-            let posMismatch: Bool = {
-                guard let p = actualPos else { return true }
-                return abs(p.x - entry.frame.origin.x) >= 1.5 || abs(p.y - entry.frame.origin.y) >= 1.5
-            }()
-            let sizeMismatch: Bool = {
-                guard let s = actualSize else { return true }
-                return abs(s.width - entry.frame.size.width) >= 1.5 || abs(s.height - entry.frame.size.height) >= 1.5
-            }()
-
-            var needsFullFrame = sizeMismatch
+            var needsFullFrame = true
             if let last = lastAppliedFrames[entry.id] {
                 let dx = abs(last.origin.x - entry.frame.origin.x)
                 let dy = abs(last.origin.y - entry.frame.origin.y)
                 let dw = abs(last.size.width - entry.frame.size.width)
                 let dh = abs(last.size.height - entry.frame.size.height)
                 let stashedChanged = (lastStashedState[entry.id] ?? false) != entry.isStashed
-                if dw >= 0.5 || dh >= 0.5 || stashedChanged {
-                    needsFullFrame = true
-                }
-                if dx < 0.5 && dy < 0.5 && !needsFullFrame && !posMismatch && !sizeMismatch {
+
+                needsFullFrame = dw >= 0.5 || dh >= 0.5 || stashedChanged
+                if dx < 0.5 && dy < 0.5 && !needsFullFrame {
                     continue
                 }
-            } else {
-                needsFullFrame = true
             }
 
             lastStashedState[entry.id] = entry.isStashed
-            placementsByPID[entry.pid, default: []].append((elem: elem, id: entry.id, frame: entry.frame, needsFullFrame: needsFullFrame))
+            lastAppliedFrames[entry.id] = entry.frame
+            pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
+
+            let mutation = AppDriver.WindowMutation(
+                element: elem,
+                windowID: entry.id,
+                frame: entry.frame,
+                needsFullFrame: needsFullFrame
+            )
+            mutationsByPID[entry.pid, default: []].append(mutation)
         }
 
-        for (pid, entries) in placementsByPID {
-            let appElem = AXElement.application(pid: pid)
-            let wasEnhanced = appElem.enhancedUserInterface
-            // VoiceOver animates window bounds when AXEnhancedUserInterface is active,
-            // causing visible frame stutter during batch programmatic positioning.
-            if wasEnhanced {
-                appElem.enhancedUserInterface = false
-            }
-            for entry in entries {
-                if entry.needsFullFrame {
-                    entry.elem.setFrame(entry.frame)
-                } else {
-                    entry.elem.position = entry.frame.origin
-                }
-                lastAppliedFrames[entry.id] = entry.frame
-                pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
-                RibbonLog.log(
-                    "AX applied wid=\(entry.id) pid=\(pid) full=\(entry.needsFullFrame) target=\(entry.frame.integral)",
-                    category: "ax"
-                )
-            }
-            if wasEnhanced {
-                appElem.enhancedUserInterface = true
+        for (pid, mutations) in mutationsByPID {
+            let driver = appDriver(for: pid)
+            Task {
+                await driver.enqueue(mutations)
             }
         }
     }

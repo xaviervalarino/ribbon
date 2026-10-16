@@ -5,7 +5,9 @@ import CoreGraphics
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ id: inout CGWindowID) -> AXError
 
-public final class AXElement {
+/// Wraps an opaque CoreFoundation AXUIElementRef pointer.
+/// Marked @unchecked Sendable because macOS Accessibility APIs are thread-safe across Mach message ports.
+public final class AXElement: @unchecked Sendable {
     public let rawElement: AXUIElement
 
     public init(_ rawElement: AXUIElement) {
@@ -14,12 +16,17 @@ public final class AXElement {
 
     public static func application(pid: pid_t) -> AXElement {
         let app = AXUIElementCreateApplication(pid)
-        _ = AXUIElementSetMessagingTimeout(app, 1.0)
+        _ = AXUIElementSetMessagingTimeout(app, 0.250)
         return AXElement(app)
     }
 
     public static func systemWide() -> AXElement {
         return AXElement(AXUIElementCreateSystemWide())
+    }
+
+    @discardableResult
+    public func setMessagingTimeout(_ timeoutInSeconds: Float) -> AXError {
+        return AXUIElementSetMessagingTimeout(rawElement, timeoutInSeconds)
     }
 
     // MARK: - Attributes

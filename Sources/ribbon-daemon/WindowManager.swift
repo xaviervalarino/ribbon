@@ -108,6 +108,20 @@ public final class WindowManager {
     var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
     var originalFrames: [CGWindowID: CGRect] = [:]
     var isStopped = false
+    var appDrivers: [pid_t: AppDriver] = [:]
+
+    func appDriver(for pid: pid_t) -> AppDriver {
+        if let driver = appDrivers[pid] {
+            return driver
+        }
+        let driver = AppDriver(pid: pid)
+        appDrivers[pid] = driver
+        return driver
+    }
+
+    func removeAppDriver(for pid: pid_t) {
+        appDrivers.removeValue(forKey: pid)
+    }
 
     var restoreFramesURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
@@ -320,6 +334,8 @@ public final class WindowManager {
                 try? FileManager.default.removeItem(at: restoreFramesURL)
             }
         }
+
+        appDrivers.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,
