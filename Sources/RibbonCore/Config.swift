@@ -16,7 +16,7 @@ public struct Config: Sendable, Codable {
     public var spaceChangeDebounceMs: Int
 
     public init(
-        windowGap: Double = 8.0,
+        windowGap: Double = 4.0,
         edgeMargin: Double = 2.0,
         defaultWidthRatio: Double = 0.5,
         widthCycleRatios: [Double] = [0.382, 0.5, 0.618, 0.8, 1.0],

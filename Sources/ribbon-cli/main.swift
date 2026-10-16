@@ -16,6 +16,7 @@ guard !arguments.isEmpty else {
       ribbon barf
       ribbon retile
       ribbon rescan
+      ribbon start
       ribbon restart
       ribbon quit (alias: stop)
       ribbon status
@@ -57,7 +58,7 @@ let connectResult = withUnsafePointer(to: &addr) {
 }
 
 guard connectResult == 0 else {
-    if command == "restart" {
+    if command == "restart" || command == "start" {
         close(clientFD)
         let exeURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
         let binDir = exeURL.deletingLastPathComponent()
@@ -65,17 +66,28 @@ guard connectResult == 0 else {
         let appPath = FileManager.default.fileExists(atPath: appBundleURL.path)
             ? appBundleURL.path
             : "bin/Ribbon.app"
-        print("[ribbon] daemon not running; launching \(appPath)...")
+        print("[ribbon] launching \(appPath)...")
         let task = Process()
         task.launchPath = "/usr/bin/open"
         task.arguments = [appPath]
-        try? task.run()
-        task.waitUntilExit()
-        exit(task.terminationStatus)
+        do {
+            try task.run()
+            task.waitUntilExit()
+            exit(task.terminationStatus)
+        } catch {
+            fputs("[ribbon] error launching daemon: \(error)\n", stderr)
+            exit(1)
+        }
     }
     fputs("error: ribbon-daemon is not running (cannot connect to \(socketPath))\n", stderr)
     close(clientFD)
     exit(1)
+}
+
+if command == "start" {
+    print("[ribbon] daemon is already running")
+    close(clientFD)
+    exit(0)
 }
 
 let payload = command + "\n"

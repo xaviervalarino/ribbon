@@ -20,6 +20,21 @@ private func CGSCopyManagedDisplaySpaces(_ cid: Int32) -> CFArray?
 private func CGSCopySpacesForWindows(_ cid: Int32, _ mask: Int32, _ windowIDs: CFArray) -> CFArray?
 
 public enum SpaceManager {
+    public struct SpaceTopology {
+        /// Currently visible space for each connected display
+        public var activeSpaceByDisplay: [CGDirectDisplayID: UInt64] = [:]
+        /// Authoritative display owner for every space (both active and inactive)
+        public var displayBySpace: [UInt64: CGDirectDisplayID] = [:]
+
+        public init(
+            activeSpaceByDisplay: [CGDirectDisplayID: UInt64] = [:],
+            displayBySpace: [UInt64: CGDirectDisplayID] = [:]
+        ) {
+            self.activeSpaceByDisplay = activeSpaceByDisplay
+            self.displayBySpace = displayBySpace
+        }
+    }
+
     public static func spaceIDs(for windowID: CGWindowID) -> [UInt64] {
         let cid = defaultConnection()
         let windowArray = [NSNumber(value: windowID)] as CFArray
@@ -29,33 +44,71 @@ public enum SpaceManager {
         return cfSpaces.map { $0.uint64Value }
     }
 
-    public static func currentSpaceID(forDisplayID displayID: CGDirectDisplayID? = nil) -> UInt64? {
+    /// Snapshots the complete space-to-display topology from WindowServer in one call.
+    public static func currentTopology() -> SpaceTopology {
         let cid = defaultConnection()
         guard let displaySpaces = CGSCopyManagedDisplaySpaces(cid) as? [[String: Any]] else {
-            return nil
+            return SpaceTopology()
         }
-        if let dID = displayID {
-            let isMain = CGDisplayIsMain(dID) != 0
-            var uuidStr: String?
-            if let cfuuid = CGDisplayCreateUUIDFromDisplayID(dID) {
-                uuidStr = CFUUIDCreateString(nil, cfuuid.takeRetainedValue()) as String
+
+        var activeDisplays = [CGDirectDisplayID](repeating: 0, count: 16)
+        var displayCount: UInt32 = 0
+        CGGetActiveDisplayList(16, &activeDisplays, &displayCount)
+        let activeList = Array(activeDisplays.prefix(Int(displayCount)))
+
+        var uuidToDisplayID: [String: CGDirectDisplayID] = [:]
+        var mainDisplayID: CGDirectDisplayID = CGMainDisplayID()
+        for dID in activeList {
+            if CGDisplayIsMain(dID) != 0 {
+                mainDisplayID = dID
             }
-            for display in displaySpaces {
-                let ident = display["Display Identifier"] as? String
-                if (isMain && ident == "Main") || (uuidStr != nil && ident == uuidStr) {
-                    if let current = display["Current Space"] as? [String: Any] {
-                        return parseSpaceID(from: current)
+            if let cfuuid = CGDisplayCreateUUIDFromDisplayID(dID) {
+                let uuidStr = CFUUIDCreateString(nil, cfuuid.takeRetainedValue()) as String
+                uuidToDisplayID[uuidStr] = dID
+            }
+        }
+
+        var topology = SpaceTopology()
+
+        for display in displaySpaces {
+            let ident = display["Display Identifier"] as? String
+            let matchedDID: CGDirectDisplayID?
+            if ident == "Main" {
+                matchedDID = mainDisplayID
+            } else if let ident = ident, let dID = uuidToDisplayID[ident] {
+                matchedDID = dID
+            } else {
+                matchedDID = nil
+            }
+            guard let matchedDID = matchedDID else { continue }
+
+            if let current = display["Current Space"] as? [String: Any],
+               let currentSID = parseSpaceID(from: current) {
+                topology.activeSpaceByDisplay[matchedDID] = currentSID
+                topology.displayBySpace[currentSID] = matchedDID
+            }
+
+            if let spaces = display["Spaces"] as? [[String: Any]] {
+                for s in spaces {
+                    if let sID = parseSpaceID(from: s) {
+                        topology.displayBySpace[sID] = matchedDID
                     }
                 }
             }
         }
-        for display in displaySpaces {
-            if let current = display["Current Space"] as? [String: Any],
-               let sID = parseSpaceID(from: current) {
-                return sID
-            }
+
+        return topology
+    }
+
+    public static func currentSpaceID(forDisplayID displayID: CGDirectDisplayID? = nil) -> UInt64? {
+        let topology = currentTopology()
+        if let dID = displayID {
+            return topology.activeSpaceByDisplay[dID]
+                ?? topology.activeSpaceByDisplay[CGMainDisplayID()]
+                ?? topology.activeSpaceByDisplay.values.first
         }
-        return nil
+        return topology.activeSpaceByDisplay[CGMainDisplayID()]
+            ?? topology.activeSpaceByDisplay.values.first
     }
 
     private static func parseSpaceID(from dict: [String: Any]) -> UInt64? {

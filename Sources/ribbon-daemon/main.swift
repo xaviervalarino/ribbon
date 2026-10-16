@@ -14,6 +14,9 @@ guard AXIsProcessTrustedWithOptions(options) else {
 }
 
 print("[ribbon-daemon] Starting native Ribbon Window Manager daemon...")
+let app = NSApplication.shared
+app.setActivationPolicy(.accessory)
+
 let wm = WindowManager()
 
 let signalSources = [SIGINT, SIGTERM].map { sig -> DispatchSourceSignal in
@@ -41,5 +44,5 @@ do {
     exit(1)
 }
 
-// Keep daemon running on the main run loop
-RunLoop.main.run()
+// Service AppKit event loop so WindowServer treats the daemon as active & responsive
+app.run()
