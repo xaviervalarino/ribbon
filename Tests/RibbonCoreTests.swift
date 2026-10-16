@@ -151,6 +151,10 @@ func runTests() {
     TestRunner.assertEqual(pA.quartzFrame.minY, expectedY)
     TestRunner.assertEqual(pA.quartzFrame.height, expectedH)
 
+    // 9. SkyLightBridge Linker & Symbol Availability
+    let bridge = SkyLightBridge.shared
+    TestRunner.assertTrue(bridge.isAvailable, "SkyLightBridge must dynamically resolve SLSMoveWindowWithGroup on macOS")
+
     guard TestRunner.summary() else {
         exit(1)
     }

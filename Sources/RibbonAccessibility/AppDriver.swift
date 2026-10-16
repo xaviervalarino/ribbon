@@ -32,6 +32,8 @@ public actor AppDriver {
 
     private var pendingMutations: [CGWindowID: WindowMutation] = [:]
     private var lastAppliedSizes: [CGWindowID: CGSize] = [:]
+    private var pendingAXSyncPositions: [CGWindowID: (element: AXElement, position: CGPoint)] = [:]
+    private var axSyncTask: Task<Void, Never>?
     private var isDraining: Bool = false
 
     public init(pid: pid_t) {
@@ -68,16 +70,31 @@ public actor AppDriver {
                 _ = mutation.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
 
                 if mutation.needsFullFrame || lastAppliedSizes[winID] != mutation.frame.size {
+                    // Window size changed: AX resizing is required so the target app reflows views.
                     mutation.element.setFrame(mutation.frame)
                     lastAppliedSizes[winID] = mutation.frame.size
+                    pendingAXSyncPositions.removeValue(forKey: winID)
+                    RibbonLog.log(
+                        "AX frame applied wid=\(winID) pid=\(pid) target=\(mutation.frame.integral)",
+                        category: "layout"
+                    )
                 } else {
-                    mutation.element.position = mutation.frame.origin
+                    // Fast path: Pure translation moves surface directly in WindowServer GPU memory.
+                    let movedViaSkyLight = SkyLightBridge.shared.moveWindow(id: winID, to: mutation.frame.origin)
+                    if movedViaSkyLight {
+                        pendingAXSyncPositions[winID] = (element: mutation.element, position: mutation.frame.origin)
+                        RibbonLog.log(
+                            "SkyLight moved wid=\(winID) pid=\(pid) target=\(mutation.frame.origin)",
+                            category: "layout"
+                        )
+                    } else {
+                        mutation.element.position = mutation.frame.origin
+                        RibbonLog.log(
+                            "AX fallback position applied wid=\(winID) pid=\(pid) target=\(mutation.frame.origin)",
+                            category: "layout"
+                        )
+                    }
                 }
-
-                RibbonLog.log(
-                    "AX applied wid=\(winID) pid=\(pid) full=\(mutation.needsFullFrame) target=\(mutation.frame.integral)",
-                    category: "ax"
-                )
             }
 
             if wasEnhanced {
@@ -85,5 +102,30 @@ public actor AppDriver {
             }
         }
         isDraining = false
+
+        if !pendingAXSyncPositions.isEmpty {
+            axSyncTask?.cancel()
+            axSyncTask = Task { [weak self] in
+                // Debounce 120ms after gesture or scrolling activity ceases.
+                // Syncs the target application's internal frame cache so context menus and tooltips align.
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                guard !Task.isCancelled else { return }
+                await self?.flushPendingAXSync()
+            }
+        }
+    }
+
+    private func flushPendingAXSync() {
+        guard !pendingAXSyncPositions.isEmpty else { return }
+        let toSync = pendingAXSyncPositions
+        pendingAXSyncPositions.removeAll()
+        for (winID, item) in toSync {
+            _ = item.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
+            item.element.position = item.position
+            RibbonLog.log(
+                "AX debounced position synced wid=\(winID) pid=\(pid) pos=\(item.position)",
+                category: "ax-sync"
+            )
+        }
     }
 }
