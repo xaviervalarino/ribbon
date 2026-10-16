@@ -49,15 +49,17 @@ extension WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: work)
     }
 
-    func retileNow(allSpaces: Bool = false) {
+    func retileNow(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil) {
         retileWork?.cancel()
         retileWork = nil
-        retile(allSpaces: allSpaces)
+        retile(allSpaces: allSpaces, focusWindowID: focusWindowID)
     }
 
     // MARK: - Layout & Retile
 
-    public func retile(allSpaces: Bool = false) {
+    /// Recomputes and applies layouts. `focusWindowID` is focused by its AppDriver
+    /// after that driver's moves land, so the window is never focused while off-screen.
+    public func retile(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil) {
         guard !isDisplayReconfiguring else { return }
         guard !NSScreen.screens.isEmpty else { return }
         // In AppKit, (0, 0) is at the bottom-left of the primary display.
@@ -144,13 +146,17 @@ extension WindowManager {
             }
         }
 
-        applyFrames(framesToApply)
+        applyFrames(framesToApply, focusWindowID: focusWindowID)
     }
 
     /// Groups window mutations by target process and dispatches them asynchronously
     /// to per-PID AppDriver actors, keeping the main thread free from AX IPC stalls.
-    func applyFrames(_ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)]) {
+    func applyFrames(
+        _ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)],
+        focusWindowID: CGWindowID? = nil
+    ) {
         var mutationsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
+        var focusEnqueued = false
 
         for entry in frames {
             var elem = trackedWindows[entry.id]
@@ -169,7 +175,15 @@ extension WindowManager {
                 continue
             }
 
+            let shouldFocus = entry.id == focusWindowID
+            if shouldFocus {
+                focusEnqueued = true
+                // Focus lands after the driver's AX writes, so the echo window covers their latency.
+                pendingFocusEchoes[entry.id] = .now() + .milliseconds(300)
+            }
+
             var needsFullFrame = true
+            var needsMove = true
             if let last = lastAppliedFrames[entry.id] {
                 let dx = abs(last.origin.x - entry.frame.origin.x)
                 let dy = abs(last.origin.y - entry.frame.origin.y)
@@ -178,22 +192,30 @@ extension WindowManager {
 
                 // Free-edge stashing preserves dimensions; only actual (w, h) changes (>= 1.5pt) require AX resizing
                 needsFullFrame = dw >= 1.5 || dh >= 1.5
-                if dx < 0.5 && dy < 0.5 && !needsFullFrame {
-                    continue
-                }
+                needsMove = dx >= 0.5 || dy >= 0.5 || needsFullFrame
             }
+            guard needsMove || shouldFocus else { continue }
 
-            lastStashedState[entry.id] = entry.isStashed
-            lastAppliedFrames[entry.id] = entry.frame
-            pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
+            if needsMove {
+                lastStashedState[entry.id] = entry.isStashed
+                lastAppliedFrames[entry.id] = entry.frame
+                pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
+            }
 
             let mutation = AppDriver.WindowMutation(
                 element: elem,
                 windowID: entry.id,
                 frame: entry.frame,
-                needsFullFrame: needsFullFrame
+                needsFullFrame: needsFullFrame,
+                needsMove: needsMove,
+                shouldFocus: shouldFocus
             )
             mutationsByPID[entry.pid, default: []].append(mutation)
+        }
+
+        // The focus target has no placement (for example, its space is not visible).
+        if let id = focusWindowID, !focusEnqueued {
+            focusWindowDirectly(id: id)
         }
 
         for (pid, mutations) in mutationsByPID {

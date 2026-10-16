@@ -6,10 +6,13 @@ import CoreGraphics
 extension WindowManager {
     // MARK: - Focus
 
-    func focusActiveWindow() {
-        guard let active = ribbon.activeWindow, let elem = trackedWindows[active.id] else { return }
-        pendingFocusEchoes[active.id] = .now() + .milliseconds(150)
-        NSRunningApplication(processIdentifier: active.pid)?.activate()
+    func focusWindowDirectly(id: CGWindowID) {
+        guard let elem = trackedWindows[id],
+              let pid = ribbons.values.lazy
+                .flatMap({ $0.columns.flatMap(\.windows) })
+                .first(where: { $0.id == id })?.pid else { return }
+        pendingFocusEchoes[id] = .now() + .milliseconds(150)
+        NSRunningApplication(processIdentifier: pid)?.activate()
         elem.focus()
     }
 
@@ -148,8 +151,7 @@ extension WindowManager {
             activeDisplayID = targetDID
             activeSpaceID = targetSID
 
-            retileNow()
-            focusActiveWindow()
+            retileNow(focusWindowID: ribbon.activeWindow?.id)
             return "ok"
         case "retile":
             retileNow()
@@ -183,10 +185,8 @@ extension WindowManager {
             category: "cmd"
         )
 
-        retileNow()
-        if ribbon.activeWindow?.id != previousActive {
-            focusActiveWindow()
-        }
+        let newActive = ribbon.activeWindow?.id
+        retileNow(focusWindowID: newActive != previousActive ? newActive : nil)
         return "ok"
     }
 }
