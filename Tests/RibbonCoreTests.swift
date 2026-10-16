@@ -155,6 +155,89 @@ func runTests() {
     let bridge = SkyLightBridge.shared
     TestRunner.assertTrue(bridge.isAvailable, "SkyLightBridge must dynamically resolve SLSMoveWindowWithGroup on macOS")
 
+    // 10. FreeEdgeStashEngine Multi-Monitor Free Edges
+    let d1Bounds = DisplayBounds(id: 1, frame: d1Quartz, visibleFrame: d1Quartz)
+    let d2Bounds = DisplayBounds(id: 2, frame: d2Quartz, visibleFrame: d2Quartz)
+    let displays = [d1Bounds, d2Bounds]
+
+    let d1Free = FreeEdgeStashEngine.freeEdges(for: 1, in: displays)
+    TestRunner.assertTrue(d1Free.contains(.left), "D1 left edge is free")
+    TestRunner.assertTrue(d1Free.contains(.top), "D1 top edge is free")
+    TestRunner.assertTrue(d1Free.contains(.bottom), "D1 bottom edge is free")
+    TestRunner.assertFalse(d1Free.contains(.right), "D1 right edge touches D2 and is not free")
+
+    let d2Free = FreeEdgeStashEngine.freeEdges(for: 2, in: displays)
+    TestRunner.assertTrue(d2Free.contains(.right), "D2 right edge is free")
+    TestRunner.assertTrue(d2Free.contains(.top), "D2 top edge is free")
+    TestRunner.assertTrue(d2Free.contains(.bottom), "D2 bottom edge is free")
+    TestRunner.assertFalse(d2Free.contains(.left), "D2 left edge touches D1 and is not free")
+
+    // 11. FreeEdgeStashEngine Parked Origin & 1pt Anchor
+    let winSize = QuartzSize(width: 800, height: 600)
+    let leftOrigin = FreeEdgeStashEngine.parkedOrigin(
+        windowSize: winSize,
+        tiledY: 100,
+        wing: .left,
+        targetDisplay: d1Bounds,
+        allDisplays: displays
+    )
+    let leftParkedRect = QuartzRect(origin: leftOrigin, size: winSize)
+    TestRunner.assertEqual(leftParkedRect.maxX, 1.0, "Left parked window retains exactly 1.0pt sliver on host display")
+    TestRunner.assertTrue(FreeEdgeStashEngine.isZeroBleed(rect: leftParkedRect, hostID: 1, allDisplays: displays), "Left parked window has zero bleed into other displays")
+
+    let rightOrigin = FreeEdgeStashEngine.parkedOrigin(
+        windowSize: winSize,
+        tiledY: 100,
+        wing: .right,
+        targetDisplay: d1Bounds,
+        allDisplays: displays
+    )
+    let rightParkedRect = QuartzRect(origin: rightOrigin, size: winSize)
+    TestRunner.assertTrue(FreeEdgeStashEngine.isZeroBleed(rect: rightParkedRect, hostID: 1, allDisplays: displays), "Blocked right edge parks window with zero bleed into D2")
+
+    // 12. Stashed Window Size Invariance (Zero AX Resize / Delta W/H = 0)
+    let threeColRibbon = Ribbon(
+        columns: [
+            ColumnModel(windows: [WindowModel(id: 201, pid: 1, title: "Left", appName: "App1")], widthRatio: 1.0),
+            ColumnModel(windows: [WindowModel(id: 202, pid: 2, title: "Center", appName: "App2")], widthRatio: 1.0),
+            ColumnModel(windows: [WindowModel(id: 203, pid: 3, title: "Right", appName: "App3")], widthRatio: 1.0)
+        ],
+        activeColumnIndex: 1,
+        viewportOffset: LayoutEngine.minimalScrollOffset(
+            for: Ribbon(
+                columns: [
+                    ColumnModel(windows: [WindowModel(id: 201, pid: 1, title: "Left", appName: "App1")], widthRatio: 1.0),
+                    ColumnModel(windows: [WindowModel(id: 202, pid: 2, title: "Center", appName: "App2")], widthRatio: 1.0),
+                    ColumnModel(windows: [WindowModel(id: 203, pid: 3, title: "Right", appName: "App3")], widthRatio: 1.0)
+                ],
+                activeColumnIndex: 1,
+                viewportOffset: 0.0
+            ),
+            canvasWidth: screenBounds.width - (config.edgeMargin * 2),
+            config: config
+        )
+    )
+    let threeColPlan = LayoutEngine.computePlan(
+        for: threeColRibbon,
+        screenFrame: screenBounds,
+        config: config,
+        targetDisplay: d1Bounds,
+        allDisplays: displays
+    )
+    TestRunner.assertEqual(threeColPlan.placements.count, 3)
+    let pLeft = threeColPlan.placements[0]
+    let pCenter = threeColPlan.placements[1]
+    let pRight = threeColPlan.placements[2]
+
+    TestRunner.assertTrue(pLeft.isStashed, "Column 0 should be stashed to the left")
+    TestRunner.assertFalse(pCenter.isStashed, "Column 1 should be visible/active")
+    TestRunner.assertTrue(pRight.isStashed, "Column 2 should be stashed to the right")
+
+    TestRunner.assertEqual(pLeft.quartzFrame.height, pCenter.quartzFrame.height, "Stashed window height matches active column height")
+    TestRunner.assertEqual(pLeft.quartzFrame.width, pCenter.quartzFrame.width, "Stashed window width matches active column width")
+    TestRunner.assertEqual(pRight.quartzFrame.height, pCenter.quartzFrame.height, "Stashed window height matches active column height")
+    TestRunner.assertEqual(pRight.quartzFrame.width, pCenter.quartzFrame.width, "Stashed window width matches active column width")
+
     guard TestRunner.summary() else {
         exit(1)
     }

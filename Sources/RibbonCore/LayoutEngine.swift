@@ -133,6 +133,8 @@ public struct LayoutEngine: Sendable {
         for ribbon: Ribbon,
         screenFrame: QuartzRect,
         config: Config,
+        targetDisplay: DisplayBounds? = nil,
+        allDisplays: [DisplayBounds] = [],
         allowLeftBleed: Bool = true,
         allowRightBleed: Bool = true
     ) -> TilingPlan {
@@ -156,10 +158,16 @@ public struct LayoutEngine: Sendable {
             let rightEdge = colX + colW
 
             let isStashed: Bool
-            if rightEdge <= canvasX || leftEdge >= canvasRight {
+            let wing: StripWing
+            if rightEdge <= canvasX {
                 isStashed = true
+                wing = .left
+            } else if leftEdge >= canvasRight {
+                isStashed = true
+                wing = .right
             } else {
                 isStashed = false
+                wing = (colX + colW / 2.0 < canvasX + canvasW / 2.0) ? .left : .right
                 if leftEdge < canvasX && !allowLeftBleed {
                     colW = max(50.0, rightEdge - canvasX)
                     colX = canvasX
@@ -176,7 +184,10 @@ public struct LayoutEngine: Sendable {
                 canvasH: canvasH,
                 gap: config.windowGap,
                 isStashed: isStashed,
+                wing: wing,
                 screenFrame: screenFrame,
+                targetDisplay: targetDisplay,
+                allDisplays: allDisplays,
                 config: config
             ))
         }
@@ -192,36 +203,37 @@ public struct LayoutEngine: Sendable {
         canvasH: Double,
         gap: Double,
         isStashed: Bool,
+        wing: StripWing,
         screenFrame: QuartzRect,
+        targetDisplay: DisplayBounds?,
+        allDisplays: [DisplayBounds],
         config: Config
     ) -> [WindowPlacement] {
         var results: [WindowPlacement] = []
         let count = column.windows.count
         guard count > 0 else { return results }
 
-        let s = config.stashSliverSize
-
         func makePlacement(winID: CGWindowID, tiledFrame: QuartzRect) -> WindowPlacement {
             if !isStashed {
                 return WindowPlacement(windowID: winID, quartzFrame: tiledFrame, isStashed: false)
             } else {
-                let w = tiledFrame.width
-                let h = tiledFrame.height
                 let origin: QuartzPoint
-                switch config.stashCorner {
-                case .bottomRight:
-                    origin = QuartzPoint(x: screenFrame.maxX - s, y: screenFrame.maxY - s)
-                case .bottomLeft:
-                    origin = QuartzPoint(x: screenFrame.minX - w + s, y: screenFrame.maxY - s)
-                // WindowServer refuses to place a title bar above the screen
-                // top, so top corners can only hide windows horizontally: the
-                // sliver is a full-height vertical strip at the screen edge.
-                case .topRight:
-                    origin = QuartzPoint(x: screenFrame.maxX - s, y: screenFrame.minY)
-                case .topLeft:
-                    origin = QuartzPoint(x: screenFrame.minX - w + s, y: screenFrame.minY)
+                if let target = targetDisplay {
+                    origin = FreeEdgeStashEngine.parkedOrigin(
+                        windowSize: tiledFrame.size,
+                        tiledY: tiledFrame.y,
+                        wing: wing,
+                        targetDisplay: target,
+                        allDisplays: allDisplays
+                    )
+                } else {
+                    if wing == .left {
+                        origin = QuartzPoint(x: screenFrame.minX - tiledFrame.width + FreeEdgeStashEngine.sliverAnchorSize, y: tiledFrame.y)
+                    } else {
+                        origin = QuartzPoint(x: screenFrame.maxX - FreeEdgeStashEngine.sliverAnchorSize, y: tiledFrame.y)
+                    }
                 }
-                let stashedFrame = QuartzRect(origin: origin, size: QuartzSize(width: w, height: h))
+                let stashedFrame = QuartzRect(origin: origin, size: tiledFrame.size)
                 return WindowPlacement(windowID: winID, quartzFrame: stashedFrame, isStashed: true)
             }
         }

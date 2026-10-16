@@ -86,6 +86,12 @@ extension WindowManager {
 
         var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
 
+        let allDisplayBounds: [DisplayBounds] = NSScreen.screens.map { s in
+            let full = QuartzGeometry.toQuartzRect(cocoaFrame: s.frame, primaryScreenHeight: primaryScreenHeight)
+            let vis = QuartzGeometry.toQuartzRect(cocoaFrame: s.visibleFrame, primaryScreenHeight: primaryScreenHeight)
+            return DisplayBounds(id: s.displayID, frame: full, visibleFrame: vis, scaleFactor: Double(s.backingScaleFactor))
+        }
+
         for sID in spacesToTile {
             guard var r = ribbons[sID], !r.columns.isEmpty else { continue }
             let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? NSScreen.screens.first?.displayID ?? CGMainDisplayID()
@@ -94,8 +100,9 @@ extension WindowManager {
                 continue
             }
 
-            let screenQuartzFrame = QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryScreenHeight)
-            let screenFullQuartzFrame = QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight)
+            let targetDisplay = allDisplayBounds.first(where: { $0.id == dID })
+            let screenQuartzFrame = targetDisplay?.visibleFrame ?? QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryScreenHeight)
+            let screenFullQuartzFrame = targetDisplay?.frame ?? QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight)
 
             // Prevent stashed windows from bleeding onto adjacent physical monitors.
             var leftAdjacent = false
@@ -118,6 +125,8 @@ extension WindowManager {
                 for: r,
                 screenFrame: screenQuartzFrame,
                 config: config,
+                targetDisplay: targetDisplay,
+                allDisplays: allDisplayBounds,
                 allowLeftBleed: !leftAdjacent,
                 allowRightBleed: !rightAdjacent
             )
@@ -166,9 +175,9 @@ extension WindowManager {
                 let dy = abs(last.origin.y - entry.frame.origin.y)
                 let dw = abs(last.size.width - entry.frame.size.width)
                 let dh = abs(last.size.height - entry.frame.size.height)
-                let stashedChanged = (lastStashedState[entry.id] ?? false) != entry.isStashed
 
-                needsFullFrame = dw >= 0.5 || dh >= 0.5 || stashedChanged
+                // Free-edge stashing preserves dimensions; only actual (w, h) changes require AX resizing
+                needsFullFrame = dw >= 0.5 || dh >= 0.5
                 if dx < 0.5 && dy < 0.5 && !needsFullFrame {
                     continue
                 }

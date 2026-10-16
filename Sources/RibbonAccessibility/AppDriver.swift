@@ -121,6 +121,12 @@ public actor AppDriver {
         pendingAXSyncPositions.removeAll()
         for (winID, item) in toSync {
             _ = item.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
+            // Skip write if the element's cached position matches, avoiding redundant windowDidMove: flashes
+            if let curPos = item.element.position {
+                if abs(curPos.x - item.position.x) < 1.0 && abs(curPos.y - item.position.y) < 1.0 {
+                    continue
+                }
+            }
             item.element.position = item.position
             RibbonLog.log(
                 "AX debounced position synced wid=\(winID) pid=\(pid) pos=\(item.position)",
