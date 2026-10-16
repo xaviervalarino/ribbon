@@ -28,11 +28,13 @@ public final class AXEventObserver {
     private var observers: [pid_t: AXObserver] = [:]
     private var pendingWindowRegistrations: [pid_t: [AXElement]] = [:]
     private var pendingRetryPids: Set<pid_t> = []
+    private var isRunning: Bool = false
     private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0]
 
     public init() {}
 
     public func start() {
+        isRunning = true
         // Watch for launched applications
         NSWorkspace.shared.notificationCenter.addObserver(
             self,
@@ -90,6 +92,7 @@ public final class AXEventObserver {
     }
 
     public func stop() {
+        isRunning = false
         NSWorkspace.shared.notificationCenter.removeObserver(self)
         for (_, observer) in observers {
             CFRunLoopRemoveSource(
@@ -99,6 +102,8 @@ public final class AXEventObserver {
             )
         }
         observers.removeAll()
+        pendingWindowRegistrations.removeAll()
+        pendingRetryPids.removeAll()
     }
 
     @objc private func handleAppLaunched(_ notification: Notification) {
@@ -139,7 +144,7 @@ public final class AXEventObserver {
     }
 
     private func observeApplication(pid: pid_t, attempt: Int) {
-        guard observers[pid] == nil else { return }
+        guard isRunning, observers[pid] == nil else { return }
 
         if let shouldObserve = shouldObserve,
            let app = NSRunningApplication(processIdentifier: pid),
@@ -156,6 +161,7 @@ public final class AXEventObserver {
             let axElem = AXElement(element)
             let notifString = notification as String
             DispatchQueue.main.async {
+                guard this.isRunning else { return }
                 switch notifString {
                 case kAXWindowCreatedNotification:
                     this.delegate?.windowCreated(element: axElem, pid: pid)
@@ -184,9 +190,9 @@ public final class AXEventObserver {
                 guard !pendingRetryPids.contains(pid) else { return }
                 pendingRetryPids.insert(pid)
                 DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelays[attempt]) { [weak self] in
-                    self?.pendingRetryPids.remove(pid)
+                    guard let self, self.isRunning, self.pendingRetryPids.remove(pid) != nil else { return }
                     guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
-                    self?.observeApplication(pid: pid, attempt: attempt + 1)
+                    self.observeApplication(pid: pid, attempt: attempt + 1)
                 }
             }
             return
@@ -228,6 +234,7 @@ public final class AXEventObserver {
     }
 
     public func observeWindow(element: AXElement, pid: pid_t) {
+        guard isRunning else { return }
         observeApplication(pid: pid)
         guard let obs = observers[pid] else {
             pendingWindowRegistrations[pid, default: []].append(element)
@@ -239,6 +246,7 @@ public final class AXEventObserver {
 
     public func removeObserver(pid: pid_t) {
         pendingWindowRegistrations.removeValue(forKey: pid)
+        pendingRetryPids.remove(pid)
         if let obs = observers.removeValue(forKey: pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         }

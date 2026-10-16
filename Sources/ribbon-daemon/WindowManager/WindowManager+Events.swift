@@ -67,7 +67,10 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func windowMinimized(element: AXElement, pid: pid_t) {
-        guard let id = element.windowID else { return }
+        guard let id = element.windowID
+            ?? windowIDsByElement[element.rawElement]
+            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
+        else { return }
         removeFromRibbon(id: id)
         scheduleRetile()
     }
@@ -202,35 +205,67 @@ extension WindowManager: AXEventObserverDelegate {
         }
 
         if let sID = foundSpaceID, var r = ribbons[sID] {
-            activeSpaceID = sID
-            if let dID = displayBySpaceID[sID] {
-                activeDisplayID = dID
+            let topology = SpaceManager.currentTopology()
+            let isVisibleSpace = topology.activeSpaceByDisplay.values.contains(sID)
+            if isVisibleSpace {
+                activeSpaceID = sID
+                if let dID = topology.displayBySpace[sID] ?? displayBySpaceID[sID] {
+                    activeDisplayID = dID
+                }
             }
+
             let wasOverview = r.isOverview
-            if wasOverview {
+            if wasOverview && isVisibleSpace {
                 r.isOverview = false
             }
 
             let oldActive = r.activeColumnIndex
             let oldRow = r.activeColumn?.activeRowIndex
             if r.focus(windowID: id) {
-                if r.activeColumnIndex != oldActive || r.activeColumn?.activeRowIndex != oldRow || wasOverview {
+                if r.activeColumnIndex != oldActive || r.activeColumn?.activeRowIndex != oldRow || (wasOverview && isVisibleSpace) {
                     ribbons[sID] = r
-                    scheduleRetile()
+                    if isVisibleSpace {
+                        scheduleRetile()
+                    }
                 }
             }
         }
     }
 
     public func applicationActivated(pid: pid_t) {
+        let onScreen = onScreenWindowIDs()
         let app = AXElement.application(pid: pid)
-        if let focused = app.focusedWindow ?? app.windows.first {
+        let candidate: AXElement? = {
+            if let focused = app.focusedWindow,
+               let id = focused.windowID,
+               onScreen?.contains(id) ?? true {
+                return focused
+            }
+            return app.windows.first { win in
+                guard let id = win.windowID else { return false }
+                return onScreen?.contains(id) ?? false
+            }
+        }()
+
+        if let focused = candidate {
             windowFocused(element: focused, pid: pid)
         } else {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
-                guard let self else { return }
+                guard let self, !self.isStopped else { return }
+                let onScreenRetry = self.onScreenWindowIDs()
                 let retryApp = AXElement.application(pid: pid)
-                if let focused = retryApp.focusedWindow ?? retryApp.windows.first {
+                let retryCandidate: AXElement? = {
+                    if let focused = retryApp.focusedWindow,
+                       let id = focused.windowID,
+                       onScreenRetry?.contains(id) ?? true {
+                        return focused
+                    }
+                    return retryApp.windows.first { win in
+                        guard let id = win.windowID else { return false }
+                        return onScreenRetry?.contains(id) ?? false
+                    }
+                }()
+                if let focused = retryCandidate {
                     self.windowFocused(element: focused, pid: pid)
                 }
             }

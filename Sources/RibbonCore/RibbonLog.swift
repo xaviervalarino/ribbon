@@ -2,7 +2,7 @@ import Foundation
 
 public enum RibbonLog {
     private static let queue = DispatchQueue(label: "com.ribbon.logger", qos: .utility)
-    public static let logFilePath = "/tmp/ribbon.log"
+    public static let logFilePath = "/tmp/ribbon-\(getuid()).log"
     private static let maxLogBytes: UInt64 = 5 * 1024 * 1024 // 5 MB auto-rotation
 
     private static let dateFormatter: ISO8601DateFormatter = {
@@ -18,11 +18,12 @@ public enum RibbonLog {
         line: Int = #line
     ) {
         let msg = message()
-        let timestamp = dateFormatter.string(from: Date())
+        let now = Date()
         let shortFile = (file as NSString).lastPathComponent
-        let lineStr = "[\(timestamp)] [\(category)] (\(shortFile):\(line)) \(msg)\n"
 
         queue.async {
+            let timestamp = dateFormatter.string(from: now)
+            let lineStr = "[\(timestamp)] [\(category)] (\(shortFile):\(line)) \(msg)\n"
             guard let data = lineStr.data(using: .utf8) else { return }
             let fm = FileManager.default
             if fm.fileExists(atPath: logFilePath) {

@@ -187,9 +187,14 @@ public struct Ribbon: Sendable, Codable {
             }
         }
 
-        let defaultRatio = config.appWidthRatios[window.appName] ?? config.defaultWidthRatio
+        let configuredRatio = config.appWidthRatios[window.appName]
+            ?? window.bundleId.flatMap { config.appWidthRatios[$0] }
+        let defaultRatio = configuredRatio ?? config.defaultWidthRatio
         let rawRatio = initialWidthRatio ?? defaultRatio
-        let ratio = (initialWidthRatio != nil && rawRatio >= 0.95) ? defaultRatio : rawRatio
+        let isConfiguredFullWidth = (configuredRatio ?? 0.0) >= 0.95
+        let ratio = (initialWidthRatio != nil && rawRatio >= 0.95 && !isConfiguredFullWidth)
+            ? defaultRatio
+            : rawRatio
         let newColumn = ColumnModel(
             windows: [window],
             widthRatio: ratio,
@@ -202,10 +207,6 @@ public struct Ribbon: Sendable, Codable {
         } else {
             if columns.count == 1 {
                 columns[0].hasExplicitSingleWidth = false
-                if columns[0].widthRatio >= 0.95 {
-                    let firstApp = columns[0].windows.first?.appName ?? ""
-                    columns[0].widthRatio = config.appWidthRatios[firstApp] ?? config.defaultWidthRatio
-                }
             }
             let insertIndex: Int
             if let idx = index {
@@ -218,6 +219,8 @@ public struct Ribbon: Sendable, Codable {
             columns.insert(newColumn, at: insertIndex)
             if activate {
                 activeColumnIndex = insertIndex
+            } else if insertIndex <= activeColumnIndex {
+                activeColumnIndex += 1
             }
         }
     }
@@ -236,7 +239,11 @@ public struct Ribbon: Sendable, Codable {
                         activeColumnIndex = max(0, columns.count - 1)
                     }
                 } else {
-                    col.activeRowIndex = max(0, min(col.activeRowIndex, col.windows.count - 1))
+                    if rIdx < col.activeRowIndex {
+                        col.activeRowIndex = max(0, col.activeRowIndex - 1)
+                    } else {
+                        col.activeRowIndex = max(0, min(col.activeRowIndex, col.windows.count - 1))
+                    }
                     columns[cIdx] = col
                 }
                 return

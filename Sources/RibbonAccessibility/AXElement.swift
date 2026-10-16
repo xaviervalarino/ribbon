@@ -56,9 +56,11 @@ public final class AXElement {
         get {
             var value: AnyObject?
             let error = AXUIElementCopyAttributeValue(rawElement, kAXPositionAttribute as CFString, &value)
-            guard error == .success, let axVal = value else { return nil }
+            guard error == .success,
+                  let axVal = value,
+                  CFGetTypeID(axVal) == AXValueGetTypeID() else { return nil }
             var point = CGPoint.zero
-            AXValueGetValue(axVal as! AXValue, .cgPoint, &point)
+            guard AXValueGetValue(axVal as! AXValue, .cgPoint, &point) else { return nil }
             return point
         }
         set {
@@ -72,9 +74,11 @@ public final class AXElement {
         get {
             var value: AnyObject?
             let error = AXUIElementCopyAttributeValue(rawElement, kAXSizeAttribute as CFString, &value)
-            guard error == .success, let axVal = value else { return nil }
+            guard error == .success,
+                  let axVal = value,
+                  CFGetTypeID(axVal) == AXValueGetTypeID() else { return nil }
             var size = CGSize.zero
-            AXValueGetValue(axVal as! AXValue, .cgSize, &size)
+            guard AXValueGetValue(axVal as! AXValue, .cgSize, &size) else { return nil }
             return size
         }
         set {

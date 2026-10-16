@@ -45,9 +45,10 @@ setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32
 
 var addr = sockaddr_un()
 addr.sun_family = sa_family_t(AF_UNIX)
-_ = withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
+withUnsafeMutableBytes(of: &addr.sun_path) { rawBuf in
+    guard let baseAddress = rawBuf.baseAddress else { return }
     socketPath.withCString { cstr in
-        strncpy(ptr, cstr, 104)
+        _ = strncpy(baseAddress.assumingMemoryBound(to: CChar.self), cstr, rawBuf.count - 1)
     }
 }
 
@@ -60,7 +61,7 @@ let connectResult = withUnsafePointer(to: &addr) {
 guard connectResult == 0 else {
     if command == "restart" || command == "start" {
         close(clientFD)
-        let exeURL = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+        let exeURL = Bundle.main.executableURL ?? URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
         let binDir = exeURL.deletingLastPathComponent()
         let appBundleURL = binDir.appendingPathComponent("Ribbon.app")
         let appPath = FileManager.default.fileExists(atPath: appBundleURL.path)

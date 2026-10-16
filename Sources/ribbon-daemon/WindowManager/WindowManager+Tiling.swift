@@ -191,13 +191,12 @@ extension WindowManager {
         }
 
         for (pid, entries) in placementsByPID {
-            let anyNeedsFullFrame = entries.contains(where: { $0.needsFullFrame })
-            let appElem = anyNeedsFullFrame ? AXElement.application(pid: pid) : nil
-            let wasEnhanced = appElem?.enhancedUserInterface ?? false
+            let appElem = AXElement.application(pid: pid)
+            let wasEnhanced = appElem.enhancedUserInterface
             // VoiceOver animates window bounds when AXEnhancedUserInterface is active,
             // causing visible frame stutter during batch programmatic positioning.
             if wasEnhanced {
-                appElem?.enhancedUserInterface = false
+                appElem.enhancedUserInterface = false
             }
             for entry in entries {
                 if entry.needsFullFrame {
@@ -208,12 +207,12 @@ extension WindowManager {
                 lastAppliedFrames[entry.id] = entry.frame
                 pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
                 RibbonLog.log(
-                    "AX applied wid=\(entry.id) pid=\(pid) full=\(entry.needsFullFrame) target=\(entry.frame.integral) actualAfter=(pos:\(String(describing: entry.elem.position)), size:\(String(describing: entry.elem.size)))",
+                    "AX applied wid=\(entry.id) pid=\(pid) full=\(entry.needsFullFrame) target=\(entry.frame.integral)",
                     category: "ax"
                 )
             }
             if wasEnhanced {
-                appElem?.enhancedUserInterface = true
+                appElem.enhancedUserInterface = true
             }
         }
     }

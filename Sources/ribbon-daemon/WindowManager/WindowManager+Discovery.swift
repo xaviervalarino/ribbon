@@ -33,7 +33,7 @@ extension WindowManager {
         retile(allSpaces: true)
     }
 
-    func reconcileWindows(sortHorizontally: Bool = false) {
+    func reconcileWindows(sortHorizontally: Bool = true) {
         let topology = SpaceManager.currentTopology()
         for (sID, dID) in topology.displayBySpace {
             displayBySpaceID[sID] = dID
@@ -91,8 +91,13 @@ extension WindowManager {
             }
         }
 
-        if sortHorizontally {
-            discovered.sort { $0.x < $1.x }
+        // Always sort newly discovered windows left-to-right by origin.x;
+        // upsertWindow preserves existing column positions for already-tracked windows.
+        if sortHorizontally || !discovered.isEmpty {
+            discovered.sort {
+                if $0.x != $1.x { return $0.x < $1.x }
+                return $0.id < $1.id
+            }
         }
 
         for entry in discovered {
@@ -132,7 +137,7 @@ extension WindowManager {
         }
 
         let winFrame = frame ?? win.frame ?? .zero
-        let isStashed = winFrame.width <= 50 || winFrame.height <= 50
+        let isStashed = (lastStashedState[id] == true) || winFrame.width <= 50 || winFrame.height <= 50
         let fallbackScreen = (isStashed ? nil : screen(forFrame: winFrame))
             ?? NSScreen.main
             ?? NSScreen.screens.first

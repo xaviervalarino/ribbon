@@ -21,9 +21,10 @@ public final class SocketServer {
     private static func makeAddress(_ path: String) -> sockaddr_un {
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
-        _ = withUnsafeMutablePointer(to: &addr.sun_path.0) { ptr in
+        withUnsafeMutableBytes(of: &addr.sun_path) { rawBuf in
+            guard let baseAddress = rawBuf.baseAddress else { return }
             path.withCString { cstr in
-                strncpy(ptr, cstr, maxPathBytes)
+                _ = strncpy(baseAddress.assumingMemoryBound(to: CChar.self), cstr, rawBuf.count - 1)
             }
         }
         return addr
