@@ -46,7 +46,7 @@ public struct LayoutEngine: Sendable {
             let count = ribbon.columns.count
             let totalGaps = Double(max(0, count - 1)) * config.windowGap
             let availableWidth = max(Double(count) * 40.0, canvasWidth - totalGaps)
-            let colWidth = availableWidth / Double(count)
+            let colWidth = floor(availableWidth / Double(count))
             var currentX = 0.0
             for _ in ribbon.columns {
                 result.append((x: currentX, width: colWidth))
@@ -58,7 +58,7 @@ public struct LayoutEngine: Sendable {
         if ribbon.columns.count == 1 {
             let col = ribbon.columns[0]
             let effectiveRatio = col.hasExplicitSingleWidth ? col.widthRatio : 1.0
-            let width = min(canvasWidth, effectiveRatio * canvasWidth)
+            let width = (effectiveRatio >= 0.999) ? canvasWidth : floor(min(canvasWidth, effectiveRatio * canvasWidth))
             return [(x: 0.0, width: width)]
         }
 
@@ -69,7 +69,7 @@ public struct LayoutEngine: Sendable {
                 width = canvasWidth
             } else {
                 let rawWidth = col.widthRatio * (canvasWidth + config.windowGap) - config.windowGap
-                width = max(50.0, min(canvasWidth, rawWidth))
+                width = floor(max(50.0, min(canvasWidth, rawWidth)))
             }
             result.append((x: currentX, width: width))
             currentX += width + config.windowGap
@@ -103,7 +103,7 @@ public struct LayoutEngine: Sendable {
 
         let last = geometry[geometry.count - 1]
         let totalStripWidth = last.x + last.width
-        return max(0.0, min(offset, max(0.0, totalStripWidth - canvasWidth)))
+        return floor(max(0.0, min(offset, max(0.0, totalStripWidth - canvasWidth))))
     }
 
     public static func computePlan(
@@ -140,10 +140,10 @@ public struct LayoutEngine: Sendable {
     ) -> TilingPlan {
         guard !ribbon.columns.isEmpty else { return TilingPlan() }
 
-        let canvasX = screenFrame.minX + config.edgeMargin
-        let canvasY = screenFrame.minY + config.edgeMargin
-        let canvasW = screenFrame.width - (config.edgeMargin * 2)
-        let canvasH = screenFrame.height - (config.edgeMargin * 2)
+        let canvasX = floor(screenFrame.minX + config.edgeMargin)
+        let canvasY = floor(screenFrame.minY + config.edgeMargin)
+        let canvasW = floor(screenFrame.width - (config.edgeMargin * 2))
+        let canvasH = floor(screenFrame.height - (config.edgeMargin * 2))
 
         let geometry = columnGeometry(for: ribbon, canvasWidth: canvasW, config: config)
         var placements: [WindowPlacement] = []
@@ -151,8 +151,8 @@ public struct LayoutEngine: Sendable {
 
         for (index, col) in ribbon.columns.enumerated() {
             let geo = geometry[index]
-            var colX = canvasX + geo.x - ribbon.viewportOffset
-            var colW = geo.width
+            let colX = floor(canvasX + geo.x - ribbon.viewportOffset)
+            let colW = geo.width
 
             let leftEdge = colX
             let rightEdge = colX + colW
@@ -168,12 +168,6 @@ public struct LayoutEngine: Sendable {
             } else {
                 isStashed = false
                 wing = (colX + colW / 2.0 < canvasX + canvasW / 2.0) ? .left : .right
-                if leftEdge < canvasX && !allowLeftBleed {
-                    colW = max(50.0, rightEdge - canvasX)
-                    colX = canvasX
-                } else if rightEdge > canvasRight && !allowRightBleed {
-                    colW = max(50.0, canvasRight - colX)
-                }
             }
 
             placements.append(contentsOf: layoutColumn(
@@ -248,14 +242,14 @@ public struct LayoutEngine: Sendable {
             let maxGaps = max(0.0, canvasH - (Double(count) * minWindowHeight))
             let effectiveGap = count > 1 ? min(gap, maxGaps / Double(count - 1)) : 0.0
             let totalGaps = Double(count - 1) * effectiveGap
-            let windowH = max(minWindowHeight, (canvasH - totalGaps) / Double(count))
+            let windowH = floor(max(minWindowHeight, (canvasH - totalGaps) / Double(count)))
             var currentY = canvasY
             let bottomLimit = canvasY + canvasH
 
             for (idx, win) in column.windows.enumerated() {
                 let available = max(minWindowHeight, bottomLimit - currentY)
                 let h = (idx == count - 1) ? available : min(windowH, available)
-                let frame = QuartzRect(x: x, y: currentY, width: width, height: h)
+                let frame = QuartzRect(x: x, y: currentY, width: width, height: floor(h))
                 results.append(makePlacement(winID: win.id, tiledFrame: frame))
                 currentY += windowH + effectiveGap
             }

@@ -176,8 +176,8 @@ extension WindowManager {
                 let dw = abs(last.size.width - entry.frame.size.width)
                 let dh = abs(last.size.height - entry.frame.size.height)
 
-                // Free-edge stashing preserves dimensions; only actual (w, h) changes require AX resizing
-                needsFullFrame = dw >= 0.5 || dh >= 0.5
+                // Free-edge stashing preserves dimensions; only actual (w, h) changes (>= 1.5pt) require AX resizing
+                needsFullFrame = dw >= 1.5 || dh >= 1.5
                 if dx < 0.5 && dy < 0.5 && !needsFullFrame {
                     continue
                 }
