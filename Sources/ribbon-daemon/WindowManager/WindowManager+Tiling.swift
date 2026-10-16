@@ -7,23 +7,26 @@ extension WindowManager {
     // MARK: - Screen Resolution
 
     func screen(forFrame frame: CGRect) -> NSScreen? {
+        return screen(forQuartzFrame: QuartzRect(frame))
+    }
+
+    func screen(forQuartzFrame frame: QuartzRect) -> NSScreen? {
         if NSScreen.screens.count <= 1 {
             return NSScreen.main ?? NSScreen.screens.first
         }
-        let primaryScreenHeight = NSScreen.screens.first?.frame.height ?? 0
-        let cocoaY = primaryScreenHeight - (frame.origin.y + frame.height)
-        let cocoaFrame = CGRect(x: frame.origin.x, y: cocoaY, width: frame.width, height: frame.height)
+        let primaryScreenHeight = Double(NSScreen.screens.first?.frame.height ?? 0)
+        let screens = NSScreen.screens.map { screen in
+            (screen: screen, bounds: QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight))
+        }
 
         var bestScreen: NSScreen?
-        var maxArea: CGFloat = 0
+        var maxArea: Double = 0
 
-        for screen in NSScreen.screens {
-            let inter = screen.frame.intersection(cocoaFrame)
-            if !inter.isNull {
-                let area = inter.width * inter.height
-                if area > maxArea {
-                    maxArea = area
-                    bestScreen = screen
+        for item in screens {
+            if let inter = item.bounds.intersection(frame) {
+                if inter.area > maxArea {
+                    maxArea = inter.area
+                    bestScreen = item.screen
                 }
             }
         }
@@ -57,7 +60,9 @@ extension WindowManager {
     public func retile(allSpaces: Bool = false) {
         guard !isDisplayReconfiguring else { return }
         guard !NSScreen.screens.isEmpty else { return }
-        let primaryScreenHeight = NSScreen.screens.first?.frame.height ?? (NSScreen.main?.frame.height ?? 0)
+        // In AppKit, (0, 0) is at the bottom-left of the primary display.
+        // The primary display's height serves as the universal Y-axis reflection plane.
+        let primaryScreenHeight = Double(NSScreen.screens.first?.frame.height ?? (NSScreen.main?.frame.height ?? 0))
 
         let topology = SpaceManager.currentTopology()
         for (sID, dID) in topology.displayBySpace {
@@ -89,35 +94,29 @@ extension WindowManager {
                 continue
             }
 
-            let cocoaFrame = screen.visibleFrame
-            let windowServerFrame = CGRect(
-                x: cocoaFrame.minX,
-                y: primaryScreenHeight - cocoaFrame.maxY,
-                width: cocoaFrame.width,
-                height: cocoaFrame.height
-            )
+            let screenQuartzFrame = QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryScreenHeight)
+            let screenFullQuartzFrame = QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight)
 
+            // Prevent stashed windows from bleeding onto adjacent physical monitors.
             var leftAdjacent = false
             var rightAdjacent = false
-            for other in NSScreen.screens where other != screen {
-                let yOverlap = max(other.frame.minY, screen.frame.minY) < min(other.frame.maxY, screen.frame.maxY)
-                if yOverlap {
-                    if abs(other.frame.maxX - screen.frame.minX) < 1.0 {
-                        leftAdjacent = true
-                    }
-                    if abs(other.frame.minX - screen.frame.maxX) < 1.0 {
-                        rightAdjacent = true
-                    }
+            for neighborScreen in NSScreen.screens where neighborScreen != screen {
+                let neighborBounds = QuartzGeometry.toQuartzRect(cocoaFrame: neighborScreen.frame, primaryScreenHeight: primaryScreenHeight)
+                if QuartzGeometry.isAdjacentLeft(rect: screenFullQuartzFrame, candidate: neighborBounds) {
+                    leftAdjacent = true
+                }
+                if QuartzGeometry.isAdjacentRight(rect: screenFullQuartzFrame, candidate: neighborBounds) {
+                    rightAdjacent = true
                 }
             }
 
-            let canvasW = windowServerFrame.width - (config.edgeMargin * 2)
+            let canvasW = screenQuartzFrame.width - (config.edgeMargin * 2)
             r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config)
             ribbons[sID] = r
 
             let plan = LayoutEngine.computePlan(
                 for: r,
-                screenFrame: windowServerFrame,
+                screenFrame: screenQuartzFrame,
                 config: config,
                 allowLeftBleed: !leftAdjacent,
                 allowRightBleed: !rightAdjacent

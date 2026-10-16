@@ -6,9 +6,15 @@ DAEMON_SOURCES := $(wildcard Sources/RibbonCore/*.swift) \
                   $(wildcard Sources/ribbon-daemon/*.swift) \
                   $(wildcard Sources/ribbon-daemon/WindowManager/*.swift)
 
-.PHONY: all cli daemon bundle clean start restart
+.PHONY: all cli daemon bundle clean start restart test
 
 all: cli daemon bundle
+
+test: bin/test-runner
+	bin/test-runner
+
+bin/test-runner: $(wildcard Sources/RibbonCore/*.swift) Tests/RibbonCoreTests.swift | bin
+	swiftc -o bin/test-runner -framework Foundation -framework CoreGraphics Sources/RibbonCore/*.swift Tests/RibbonCoreTests.swift
 
 start: cli bundle
 	bin/ribbon start

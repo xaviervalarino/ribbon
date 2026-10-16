@@ -4,10 +4,19 @@ import CoreGraphics
 public struct WindowPlacement: Sendable {
     public let windowID: CGWindowID
     public let frame: CGRect
+    public let quartzFrame: QuartzRect
     public let isStashed: Bool
+
+    public init(windowID: CGWindowID, quartzFrame: QuartzRect, isStashed: Bool) {
+        self.windowID = windowID
+        self.quartzFrame = quartzFrame
+        self.frame = quartzFrame.cgRect
+        self.isStashed = isStashed
+    }
 
     public init(windowID: CGWindowID, frame: CGRect, isStashed: Bool) {
         self.windowID = windowID
+        self.quartzFrame = QuartzRect(frame)
         self.frame = frame
         self.isStashed = isStashed
     }
@@ -104,6 +113,29 @@ public struct LayoutEngine: Sendable {
         allowLeftBleed: Bool = true,
         allowRightBleed: Bool = true
     ) -> TilingPlan {
+        return computePlan(
+            for: ribbon,
+            screenFrame: QuartzRect(screenFrame),
+            config: config,
+            allowLeftBleed: allowLeftBleed,
+            allowRightBleed: allowRightBleed
+        )
+    }
+
+    /// Computes the tiling geometry and stashed window placements for a ribbon in Quartz space.
+    /// - Parameters:
+    ///   - ribbon: The ribbon being tiled.
+    ///   - screenFrame: The display's visible bounding rectangle in top-left Quartz coordinates.
+    ///   - config: Layout configuration (margins, inner gaps, sliver sizing).
+    ///   - allowLeftBleed: True if stashed windows may park past the left edge (when no monitor is to the left).
+    ///   - allowRightBleed: True if stashed windows may park past the right edge (when no monitor is to the right).
+    public static func computePlan(
+        for ribbon: Ribbon,
+        screenFrame: QuartzRect,
+        config: Config,
+        allowLeftBleed: Bool = true,
+        allowRightBleed: Bool = true
+    ) -> TilingPlan {
         guard !ribbon.columns.isEmpty else { return TilingPlan() }
 
         let canvasX = screenFrame.minX + config.edgeMargin
@@ -160,7 +192,7 @@ public struct LayoutEngine: Sendable {
         canvasH: Double,
         gap: Double,
         isStashed: Bool,
-        screenFrame: CGRect,
+        screenFrame: QuartzRect,
         config: Config
     ) -> [WindowPlacement] {
         var results: [WindowPlacement] = []
@@ -169,33 +201,33 @@ public struct LayoutEngine: Sendable {
 
         let s = config.stashSliverSize
 
-        func makePlacement(winID: CGWindowID, tiledFrame: CGRect) -> WindowPlacement {
+        func makePlacement(winID: CGWindowID, tiledFrame: QuartzRect) -> WindowPlacement {
             if !isStashed {
-                return WindowPlacement(windowID: winID, frame: tiledFrame, isStashed: false)
+                return WindowPlacement(windowID: winID, quartzFrame: tiledFrame, isStashed: false)
             } else {
                 let w = tiledFrame.width
                 let h = tiledFrame.height
-                let origin: CGPoint
+                let origin: QuartzPoint
                 switch config.stashCorner {
                 case .bottomRight:
-                    origin = CGPoint(x: screenFrame.maxX - s, y: screenFrame.maxY - s)
+                    origin = QuartzPoint(x: screenFrame.maxX - s, y: screenFrame.maxY - s)
                 case .bottomLeft:
-                    origin = CGPoint(x: screenFrame.minX - w + s, y: screenFrame.maxY - s)
+                    origin = QuartzPoint(x: screenFrame.minX - w + s, y: screenFrame.maxY - s)
                 // WindowServer refuses to place a title bar above the screen
                 // top, so top corners can only hide windows horizontally: the
                 // sliver is a full-height vertical strip at the screen edge.
                 case .topRight:
-                    origin = CGPoint(x: screenFrame.maxX - s, y: screenFrame.minY)
+                    origin = QuartzPoint(x: screenFrame.maxX - s, y: screenFrame.minY)
                 case .topLeft:
-                    origin = CGPoint(x: screenFrame.minX - w + s, y: screenFrame.minY)
+                    origin = QuartzPoint(x: screenFrame.minX - w + s, y: screenFrame.minY)
                 }
-                let stashedFrame = CGRect(origin: origin, size: CGSize(width: w, height: h))
-                return WindowPlacement(windowID: winID, frame: stashedFrame, isStashed: true)
+                let stashedFrame = QuartzRect(origin: origin, size: QuartzSize(width: w, height: h))
+                return WindowPlacement(windowID: winID, quartzFrame: stashedFrame, isStashed: true)
             }
         }
 
         if count == 1 {
-            let frame = CGRect(x: x, y: canvasY, width: width, height: canvasH)
+            let frame = QuartzRect(x: x, y: canvasY, width: width, height: canvasH)
             results.append(makePlacement(winID: column.windows[0].id, tiledFrame: frame))
         } else {
             // Distribute height evenly among stacked windows with inner gap.
@@ -211,7 +243,7 @@ public struct LayoutEngine: Sendable {
             for (idx, win) in column.windows.enumerated() {
                 let available = max(minWindowHeight, bottomLimit - currentY)
                 let h = (idx == count - 1) ? available : min(windowH, available)
-                let frame = CGRect(x: x, y: currentY, width: width, height: h)
+                let frame = QuartzRect(x: x, y: currentY, width: width, height: h)
                 results.append(makePlacement(winID: win.id, tiledFrame: frame))
                 currentY += windowH + effectiveGap
             }
