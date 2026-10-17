@@ -40,18 +40,25 @@ public actor AppDriver {
     public struct SlideStep: Sendable {
         public let element: AXElement
         public let origin: CGPoint
+        /// Set only when the slide animates size; each step then costs a full AX resize.
+        public let size: CGSize?
 
-        public init(element: AXElement, origin: CGPoint) {
+        public init(element: AXElement, origin: CGPoint, size: CGSize? = nil) {
             self.element = element
             self.origin = origin
+            self.size = size
         }
     }
 
-    /// Writes intermediate slide positions; the final mutation does logging and size bookkeeping.
+    /// Writes intermediate slide frames; the final mutation does logging and size bookkeeping.
     public func slide(_ steps: [SlideStep]) {
         for step in steps {
             _ = step.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
-            step.element.position = step.origin
+            if let size = step.size {
+                step.element.setFrame(CGRect(origin: step.origin, size: size))
+            } else {
+                step.element.position = step.origin
+            }
         }
     }
 

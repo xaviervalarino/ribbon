@@ -83,8 +83,37 @@ extension WindowManager {
         }
     }
 
+    /// Live-tunes slide settings for side-by-side comparison; a daemon restart resets them.
+    private func applyDebugSetting(_ args: [String]) -> String {
+        guard args.count == 2 else { return "error: debug set slide-scope|resize-mode|slide-ms <value>" }
+        let value = args[1].lowercased()
+        switch args[0].lowercased() {
+        case "slide-scope":
+            guard let scope = SlideScope(rawValue: value) else { return "error: slide-scope all|focused" }
+            config.slideScope = scope
+        case "resize-mode":
+            guard let mode = ResizeMode(rawValue: value) else { return "error: resize-mode end|grow-first|animate" }
+            config.resizeMode = mode
+        case "slide-ms":
+            guard let ms = Int(value), ms >= 0 else { return "error: slide-ms <milliseconds, 0 disables>" }
+            config.scrollAnimationMs = ms
+        default:
+            return "error: unknown setting '\(args[0])'"
+        }
+        return "ok"
+    }
+
     public func handleCommand(_ command: String) -> String {
         if command.lowercased().hasPrefix("debug") {
+            let args = command.split(separator: " ").dropFirst().map(String.init)
+            switch args.first?.lowercased() {
+            case "set":
+                return applyDebugSetting(Array(args.dropFirst()))
+            case "settings":
+                return "slide-scope=\(config.slideScope.rawValue) resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs)"
+            default:
+                break
+            }
             return DebugProbes.run(command.split(separator: " ").dropFirst().map(String.init), targets: debugProbeTargets())
         }
         let sID = currentActiveSpaceID()

@@ -164,6 +164,10 @@ extension WindowManager {
         var slidesByID: [CGWindowID: ScrollAnimator.Slide] = [:]
         var focusEnqueued = false
         let slideMs = config.scrollAnimationMs
+        // Focused scope slides only the active column; every other window jumps.
+        let slideOnly: Set<CGWindowID>? = config.slideScope == .focused
+            ? focusedColumnWindowIDs(focusWindowID: focusWindowID)
+            : nil
 
         for entry in frames {
             var elem = trackedWindows[entry.id]
@@ -198,7 +202,8 @@ extension WindowManager {
                 ?? previousFrame?.origin
             lastNaturalFrames[entry.id] = natural
             // Windows already sliding keep sliding when retargeted, so a jump never races a slide.
-            let slides = slideMs > 0 && (animated || scrollAnimator.isAnimating(entry.id))
+            let inScope = slideOnly?.contains(entry.id) ?? true
+            let slides = slideMs > 0 && ((animated && inScope) || scrollAnimator.isAnimating(entry.id))
 
             var needsFullFrame = true
             var needsMove = true
@@ -221,6 +226,12 @@ extension WindowManager {
             }
 
             if slides, needsMove, let fromNatural = previousNatural {
+                let startOrigin = scrollAnimator.currentOrigin(entry.id) ?? previousFrame?.origin ?? entry.frame.origin
+                let fromSize = scrollAnimator.currentSize(entry.id) ?? previousFrame?.size ?? entry.frame.size
+                let grows = entry.frame.width > fromSize.width + 0.5 || entry.frame.height > fromSize.height + 0.5
+                let growNow = needsFullFrame && grows && config.resizeMode == .growFirst
+                let animateSize = needsFullFrame && config.resizeMode == .animate
+
                 slidesByID[entry.id] = ScrollAnimator.Slide(
                     pid: entry.pid,
                     element: elem,
@@ -232,22 +243,27 @@ extension WindowManager {
                         to: entry.isStashed ? entry.frame : nil,
                         toNatural: natural.origin
                     ),
+                    fromSize: animateSize ? fromSize : nil,
+                    toSize: animateSize ? entry.frame.size : nil,
                     final: AppDriver.WindowMutation(
                         element: elem,
                         windowID: entry.id,
                         frame: entry.frame,
-                        needsFullFrame: needsFullFrame
+                        needsFullFrame: needsFullFrame && !growNow
                     )
                 )
+                // One start mutation per window: AppDriver merges pending mutations for a window,
+                // so a separate focus mutation would carry the final frame into the grow.
+                // Growing now lets neighbors slide out from under the window instead of opening a gap.
                 // Focus at slide start so keystrokes reach the new window immediately.
-                if shouldFocus {
+                if growNow || shouldFocus {
                     mutationsByPID[entry.pid, default: []].append(AppDriver.WindowMutation(
                         element: elem,
                         windowID: entry.id,
-                        frame: entry.frame,
-                        needsFullFrame: false,
-                        needsMove: false,
-                        shouldFocus: true
+                        frame: CGRect(origin: startOrigin, size: growNow ? entry.frame.size : fromSize),
+                        needsFullFrame: growNow,
+                        needsMove: growNow,
+                        shouldFocus: shouldFocus
                     ))
                 }
                 continue
@@ -283,6 +299,18 @@ extension WindowManager {
                 await driver.enqueue(mutations)
             }
         }
+    }
+
+    /// Windows in the column holding the focus target, or the current ribbon's active column.
+    private func focusedColumnWindowIDs(focusWindowID: CGWindowID?) -> Set<CGWindowID> {
+        if let id = focusWindowID {
+            for r in ribbons.values {
+                if let col = r.columns.first(where: { $0.windows.contains { $0.id == id } }) {
+                    return Set(col.windows.map(\.id))
+                }
+            }
+        }
+        return Set(ribbon.activeColumn?.windows.map(\.id) ?? [])
     }
 
     /// Pins a sliding window at the stash sliver of each stashed end while its strip position

@@ -4,6 +4,22 @@ public enum StashCorner: String, Sendable, Codable {
     case bottomRight, bottomLeft, topRight, topLeft
 }
 
+/// Which windows slide on a command-driven scroll; the rest jump to their targets.
+public enum SlideScope: String, Sendable, Codable {
+    case all
+    case focused
+}
+
+/// When a sliding window's size change is applied.
+public enum ResizeMode: String, Sendable, Codable {
+    /// After the slide settles.
+    case end
+    /// Growth at slide start (neighbors slide out from under it); shrinking after it settles.
+    case growFirst = "grow-first"
+    /// Every frame, alongside the position.
+    case animate
+}
+
 public struct Config: Sendable, Codable {
     public var windowGap: Double
     public var edgeMargin: Double
@@ -16,6 +32,8 @@ public struct Config: Sendable, Codable {
     public var spaceChangeDebounceMs: Int
     /// Duration of the slide for command-driven scrolls; 0 jumps windows straight to their targets.
     public var scrollAnimationMs: Int
+    public var slideScope: SlideScope
+    public var resizeMode: ResizeMode
 
     public init(
         windowGap: Double = 4.0,
@@ -47,7 +65,9 @@ public struct Config: Sendable, Codable {
         stashCorner: StashCorner = .bottomRight,
         stashSliverSize: Double = 2.0,
         spaceChangeDebounceMs: Int = 25,
-        scrollAnimationMs: Int = 150
+        scrollAnimationMs: Int = 150,
+        slideScope: SlideScope = .all,
+        resizeMode: ResizeMode = .end
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -59,6 +79,8 @@ public struct Config: Sendable, Codable {
         self.stashSliverSize = stashSliverSize
         self.spaceChangeDebounceMs = spaceChangeDebounceMs
         self.scrollAnimationMs = scrollAnimationMs
+        self.slideScope = slideScope
+        self.resizeMode = resizeMode
     }
 
     public static let `default` = Config()

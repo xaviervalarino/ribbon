@@ -29,6 +29,9 @@ final class ScrollAnimator: @unchecked Sendable {
         let fromNatural: CGPoint
         let toNatural: CGPoint
         let parking: Parking
+        /// Both set when the size animates with the position (`ResizeMode.animate`).
+        let fromSize: CGSize?
+        let toSize: CGSize?
         let final: AppDriver.WindowMutation
     }
 
@@ -38,6 +41,8 @@ final class ScrollAnimator: @unchecked Sendable {
         var fromNatural: CGPoint
         let toNatural: CGPoint
         let parking: Parking
+        var fromSize: CGSize?
+        let toSize: CGSize?
         let final: AppDriver.WindowMutation
     }
 
@@ -81,6 +86,12 @@ final class ScrollAnimator: @unchecked Sendable {
         return Self.shown(track, progress: progress(at: Self.nowMs()))
     }
 
+    /// The window's size mid-slide when its size animates, or nil.
+    func currentSize(_ id: CGWindowID) -> CGSize? {
+        guard let track = tracks[id] else { return nil }
+        return Self.size(track, progress: progress(at: Self.nowMs()))
+    }
+
     /// The window's strip position mid-slide, or nil when not sliding.
     func currentNatural(_ id: CGWindowID) -> CGPoint? {
         guard let track = tracks[id] else { return nil }
@@ -96,10 +107,12 @@ final class ScrollAnimator: @unchecked Sendable {
         let p = progress(at: now)
         for (id, track) in tracks {
             tracks[id]?.fromNatural = Self.natural(track, progress: p)
+            tracks[id]?.fromSize = Self.size(track, progress: p)
         }
         for (id, slide) in slides {
             tracks[id] = Track(pid: slide.pid, element: slide.element, fromNatural: slide.fromNatural,
-                               toNatural: slide.toNatural, parking: slide.parking, final: slide.final)
+                               toNatural: slide.toNatural, parking: slide.parking,
+                               fromSize: slide.fromSize, toSize: slide.toSize, final: slide.final)
         }
         for pid in pendingFinals.keys {
             pendingFinals[pid]?.removeAll { slides[$0.windowID] != nil }
@@ -179,7 +192,8 @@ final class ScrollAnimator: @unchecked Sendable {
         var stepsByPID: [pid_t: [AppDriver.SlideStep]] = [:]
         for track in tracks.values {
             stepsByPID[track.pid, default: []].append(
-                AppDriver.SlideStep(element: track.element, origin: Self.shown(track, progress: p))
+                AppDriver.SlideStep(element: track.element, origin: Self.shown(track, progress: p),
+                                    size: Self.size(track, progress: p))
             )
         }
         for (pid, steps) in stepsByPID where !inFlight.contains(pid) {
@@ -234,11 +248,22 @@ final class ScrollAnimator: @unchecked Sendable {
     }
 
     /// Ease-in-out sine: the strip starts and settles gently, so long jumps never lurch.
+    private static func eased(_ progress: Double) -> Double {
+        0.5 - 0.5 * cos(Double.pi * progress)
+    }
+
+    private static func size(_ track: Track, progress: Double) -> CGSize? {
+        guard let from = track.fromSize, let to = track.toSize else { return nil }
+        let e = eased(progress)
+        return CGSize(width: (from.width + (to.width - from.width) * e).rounded(),
+                      height: (from.height + (to.height - from.height) * e).rounded())
+    }
+
     private static func natural(_ track: Track, progress: Double) -> CGPoint {
-        let eased = 0.5 - 0.5 * cos(Double.pi * progress)
+        let e = eased(progress)
         return CGPoint(
-            x: track.fromNatural.x + (track.toNatural.x - track.fromNatural.x) * eased,
-            y: track.fromNatural.y + (track.toNatural.y - track.fromNatural.y) * eased
+            x: track.fromNatural.x + (track.toNatural.x - track.fromNatural.x) * e,
+            y: track.fromNatural.y + (track.toNatural.y - track.fromNatural.y) * e
         )
     }
 

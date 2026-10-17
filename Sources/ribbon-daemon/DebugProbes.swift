@@ -64,6 +64,8 @@ enum AXLatencyProbe {
         ]
         var movedByApp: [String: [Double]] = [:]
         var landedByApp: [String: [Double]] = [:]
+        var resizeCallsByApp: [String: [Double]] = [:]
+        var resizeLandedByApp: [String: [Double]] = [:]
 
         for t in targets {
             _ = t.element.setMessagingTimeout(DebugProbes.axTimeout)
@@ -110,17 +112,49 @@ enum AXLatencyProbe {
                 moveAndLand(CGPoint(x: origin.x + 20, y: origin.y))
                 moveAndLand(origin)
             }
+
+            // Resize: shrink 40pt and restore; the app re-lays out and redraws at each size.
+            var resizeCalls: [Double] = [], resizeLanded: [Double] = []
+            var resizeTimeouts = 0
+            if let size = t.element.size {
+                func resizeAndLand(_ width: CGFloat) {
+                    let t0 = DebugProbes.nowMs()
+                    t.element.setFrame(CGRect(origin: origin, size: CGSize(width: width, height: size.height)))
+                    resizeCalls.append(DebugProbes.nowMs() - t0)
+                    while DebugProbes.nowMs() - t0 < 250 {
+                        if let b = DebugProbes.serverBounds(t.id), abs(b.width - width) < 0.5 {
+                            resizeLanded.append(DebugProbes.nowMs() - t0)
+                            return
+                        }
+                        usleep(200)
+                    }
+                    resizeTimeouts += 1
+                }
+                for _ in 0..<(reps / 2) {
+                    resizeAndLand(size.width - 40)
+                    resizeAndLand(size.width)
+                }
+            }
+            resizeCallsByApp[t.app, default: []].append(contentsOf: resizeCalls)
+            resizeLandedByApp[t.app, default: []].append(contentsOf: resizeLanded)
+            let resizeText = resizeLanded.isEmpty ? "never" : "\(fmt(resizeCalls)) / \(fmt(resizeLanded)) (\(resizeTimeouts) timeouts)"
+
             movedByApp[t.app, default: []].append(contentsOf: moved)
             landedByApp[t.app, default: []].append(contentsOf: landed)
             let errText = errors.isEmpty ? "none" : errors.sorted().map(String.init).joined(separator: ",")
             let landedText = landed.isEmpty ? "never" : fmt(landed)
-            lines.append("\(t.app) | \(t.id) | \(fmt(reads)) | \(fmt(same)) | \(fmt(moved)) | \(landedText) | \(timeouts)/\(reps * 2) | \(errText)")
+            lines.append("\(t.app) | \(t.id) | \(fmt(reads)) | \(fmt(same)) | \(fmt(moved)) | \(landedText) | \(timeouts)/\(reps * 2) | \(errText) | resize call/landed \(resizeText)")
         }
 
         lines.append("per app (call returned → WindowServer bounds updated): " + landedByApp.keys.sorted().map { app in
             let xs = landedByApp[app]!.sorted()
             guard !xs.isEmpty else { return "\(app) never landed" }
             return "\(app) median \(String(format: "%.1f", DebugProbes.median(xs))) p90 \(String(format: "%.1f", xs[xs.count * 9 / 10]))"
+        }.joined(separator: "; "))
+ lines.append("per app resize (call / landed, median): " + resizeLandedByApp.keys.sorted().map { app in
+            let landed = resizeLandedByApp[app]!
+            guard !landed.isEmpty else { return "\(app) never landed" }
+            return "\(app) \(fmt(resizeCallsByApp[app]!)) / \(fmt(landed))ms (~\(Int(1000 / DebugProbes.median(landed)))fps)"
         }.joined(separator: "; "))
         lines.append("per app (write call only): " + movedByApp.keys.sorted().map { app in
             let xs = movedByApp[app]!.sorted()
