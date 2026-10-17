@@ -8,6 +8,8 @@ public struct WindowModel: Identifiable, Equatable, Sendable, Codable {
     public var title: String
     public var appName: String
     public var isFloating: Bool
+    /// The smallest height the app accepts; a resize below it leaves the window at this height.
+    public var minHeight: Double?
 
     public init(
         id: CGWindowID,

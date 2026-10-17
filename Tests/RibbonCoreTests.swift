@@ -238,6 +238,20 @@ func runTests() {
     TestRunner.assertEqual(pRight.quartzFrame.height, pCenter.quartzFrame.height, "Stashed window height matches active column height")
     TestRunner.assertEqual(pRight.quartzFrame.width, pCenter.quartzFrame.width, "Stashed window width matches active column width")
 
+    // 9. Stacked rows make room for a window's minimum height
+    var tallTop = WindowModel(id: 301, pid: 1, title: "Top", appName: "App1")
+    tallTop.minHeight = 600
+    let stackedRibbon = Ribbon(columns: [
+        ColumnModel(windows: [tallTop, WindowModel(id: 302, pid: 2, title: "Bottom", appName: "App2")], widthRatio: 1.0)
+    ])
+    let stacked = LayoutEngine.computePlan(for: stackedRibbon, screenFrame: screenBounds, config: config).placements
+    let canvasBottom = screenBounds.maxY - config.edgeMargin
+    TestRunner.assertEqual(stacked[0].quartzFrame.height, 600.0, "Row keeps its minimum height")
+    TestRunner.assertEqual(stacked[1].quartzFrame.minY, stacked[0].quartzFrame.maxY + config.windowGap, "Next row starts below the tall row")
+    TestRunner.assertEqual(stacked[1].quartzFrame.maxY, canvasBottom, "Shrinking row ends at the canvas bottom")
+    TestRunner.assertEqual(LayoutEngine.rowHeights(minimums: [30, 30, 30], usable: 900), [300, 300, 300], "Rows split evenly without minimums")
+    TestRunner.assertEqual(LayoutEngine.rowHeights(minimums: [500, 500], usable: 900), [500, 500], "Minimums that do not fit overflow")
+
     guard TestRunner.summary() else {
         exit(1)
     }

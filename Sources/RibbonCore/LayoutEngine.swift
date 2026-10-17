@@ -247,19 +247,38 @@ public struct LayoutEngine: Sendable {
             let maxGaps = max(0.0, canvasH - (Double(count) * minWindowHeight))
             let effectiveGap = count > 1 ? min(gap, maxGaps / Double(count - 1)) : 0.0
             let totalGaps = Double(count - 1) * effectiveGap
-            let windowH = floor(max(minWindowHeight, (canvasH - totalGaps) / Double(count)))
+            let minimums = column.windows.map { max(minWindowHeight, $0.minHeight ?? 0) }
+            let heights = rowHeights(minimums: minimums, usable: canvasH - totalGaps)
             var currentY = canvasY
             let bottomLimit = canvasY + canvasH
 
             for (idx, win) in column.windows.enumerated() {
-                let available = max(minWindowHeight, bottomLimit - currentY)
-                let h = (idx == count - 1) ? available : min(windowH, available)
+                // The last row takes the rounding remainder down to the canvas bottom.
+                let h = (idx == count - 1) ? max(heights[idx], bottomLimit - currentY) : heights[idx]
                 let frame = QuartzRect(x: x, y: currentY, width: width, height: floor(h))
                 results.append(makePlacement(winID: win.id, tiledFrame: frame))
-                currentY += windowH + effectiveGap
+                currentY += floor(h) + effectiveGap
             }
         }
 
         return results
+    }
+
+    /// Splits `usable` evenly across rows, holding each row at or above its minimum and taking
+    /// the difference from the rows that can shrink. When the minimums alone exceed `usable`,
+    /// every row gets its minimum and the column overflows.
+    static func rowHeights(minimums: [Double], usable: Double) -> [Double] {
+        var pinned = Set<Int>()
+        while pinned.count < minimums.count {
+            let free = minimums.indices.filter { !pinned.contains($0) }
+            let pinnedTotal = pinned.reduce(0.0) { $0 + minimums[$1] }
+            let share = floor((usable - pinnedTotal) / Double(free.count))
+            let raised = free.filter { minimums[$0] > share }
+            if raised.isEmpty {
+                return minimums.indices.map { pinned.contains($0) ? minimums[$0] : share }
+            }
+            pinned.formUnion(raised)
+        }
+        return minimums
     }
 }

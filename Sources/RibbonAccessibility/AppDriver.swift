@@ -65,9 +65,12 @@ public actor AppDriver {
     private var pendingMutations: [CGWindowID: WindowMutation] = [:]
     private var lastAppliedSizes: [CGWindowID: CGSize] = [:]
     private var isDraining: Bool = false
+    /// Called with a window's live height when it stays taller than a resize asked for.
+    private let onMinHeight: ((CGWindowID, Double) -> Void)?
 
-    public init(pid: pid_t) {
+    public init(pid: pid_t, onMinHeight: ((CGWindowID, Double) -> Void)? = nil) {
         self.pid = pid
+        self.onMinHeight = onMinHeight
     }
 
     /// Enqueues window mutations for this application process.
@@ -78,7 +81,8 @@ public actor AppDriver {
                 pendingMutations[mutation.windowID] = WindowMutation(
                     element: mutation.element,
                     windowID: mutation.windowID,
-                    frame: mutation.frame,
+                    // A focus-only mutation carries the frame from when it was made, which a retarget can outdate.
+                    frame: mutation.needsMove ? mutation.frame : existing.frame,
                     needsFullFrame: mutation.needsFullFrame || existing.needsFullFrame,
                     needsMove: mutation.needsMove || existing.needsMove,
                     shouldFocus: mutation.shouldFocus || existing.shouldFocus
@@ -141,6 +145,10 @@ public actor AppDriver {
                         "AX frame applied wid=\(winID) pid=\(pid) target=\(mutation.frame.integral)",
                         category: "layout"
                     )
+                    // Apps hold windows at their minimum height; the layout makes room once it knows it.
+                    if let live = mutation.element.size, live.height >= mutation.frame.height + 2 {
+                        onMinHeight?(winID, live.height)
+                    }
                 } else {
                     // Pure translation: single AX position write with zero resize roundtrips.
                     mutation.element.position = mutation.frame.origin

@@ -104,6 +104,18 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
+    /// Raises the window's minimum height; returns false when it is not in this ribbon or already that high.
+    @discardableResult
+    public mutating func raiseMinHeight(_ height: Double, forWindowID id: CGWindowID) -> Bool {
+        for cIdx in columns.indices {
+            guard let wIdx = columns[cIdx].windows.firstIndex(where: { $0.id == id }) else { continue }
+            guard height > (columns[cIdx].windows[wIdx].minHeight ?? 0) else { return false }
+            columns[cIdx].windows[wIdx].minHeight = height
+            return true
+        }
+        return false
+    }
+
     @discardableResult
     public mutating func setWidthRatio(_ ratio: Double, forWindowID id: CGWindowID) -> Bool {
         for (cIdx, col) in columns.enumerated() {

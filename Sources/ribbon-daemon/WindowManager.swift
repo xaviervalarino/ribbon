@@ -119,9 +119,19 @@ public final class WindowManager {
         if let driver = appDrivers[pid] {
             return driver
         }
-        let driver = AppDriver(pid: pid)
+        let driver = AppDriver(pid: pid) { [weak self] id, height in
+            DispatchQueue.main.async { self?.recordMinHeight(height, forWindowID: id) }
+        }
         appDrivers[pid] = driver
         return driver
+    }
+
+    func recordMinHeight(_ height: Double, forWindowID id: CGWindowID) {
+        for sID in ribbons.keys where ribbons[sID]?.raiseMinHeight(height, forWindowID: id) == true {
+            RibbonLog.log("min height wid=\(id) \(Int(height))", category: "layout")
+            lastAppliedFrames.removeValue(forKey: id)
+            scheduleRetile()
+        }
     }
 
     func removeAppDriver(for pid: pid_t) {
