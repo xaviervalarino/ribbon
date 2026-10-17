@@ -116,6 +116,10 @@ Other confirmed defects (full review in git history / session notes): destroy no
 - [x] Test `focus up/down`, `slurp`, `barf`.
 - [ ] Column jumps for long ribbons: `focus first|last` and `move first|last` (move the active column to the strip's start or end). One long slide each; with focus at slide end only the landing window activates.
 - [ ] Window tags: mark a window with a tag, then `focus tag <name>` jumps to it from anywhere in the ribbon.
+- [ ] Open questions on stacked columns (raised 2026-10-17):
+  - Mail keeps a minimum width, so in a stacked column it sticks out past the column. Should the column widen to the largest minimum width of its windows? Minimum heights are already learned and honored.
+  - `move` skips over a stacked column. Should it drop the window into a row of the column, or is that a separate command?
+  - When a window enters a stacked column that is full, which window leaves: the last row (and the column reflows), or the row it replaces?
 
 ### Phase 5: Integration
 - [x] Karabiner: replace Hammerspoon calls in `karabiner.edn` with `~/dev/ribbon/bin/ribbon ...`.
