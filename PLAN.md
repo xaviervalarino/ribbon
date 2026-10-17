@@ -153,6 +153,8 @@ The Ribbon 2.0 spec (agy session notes, not in repo) drove commits `6a37dd4`..`6
 - [ ] Experiment: atomic cut. Wrap a batch in `SLSDisableUpdate`/`SLSReenableUpdate` on Ribbon's connection and await all drivers (~100ms cap); confirm it freezes compositing globally so every window jumps in one frame.
 - [ ] Experiment: slide only the focused column with ~10 AX position writes over ≤180ms (PaperWM.spoon approach); expect lag on Electron.
 - [ ] Experiment: trackpad follow (spec §4.1 reworked) with throttled AX position writes, one per frame per visible window, from a `CGEventTap` on continuous scroll events.
+- [x] Resize timing A/B (2026-10-17; 3 slurps and 3 barfs per round, 0.4s apart; `slow step` lines in the daemon log). `instant` stalls the resizing app's slide 42–124ms at slide-ms 100 and 44–65ms at 55; `end` stalls 0; `grow-first` stalls only on barf (40–60ms). The stall is the app's resize time, so slide length does not shorten it. Defaults are now `resize-mode end` and `slide-ms 55`. Trade-off: on barf, `end` shows the desktop beside growing windows until the slide lands.
+- [ ] Open: long slides may favor `grow-first`, since `end` shows the desktop for the whole slide while a 40–60ms stall shrinks as a share of it. The threshold is unmeasured; rerun the A/B at slide-ms 150, 200 and 300 before tying resize timing to slide length or adding a config option.
 - [ ] Experiment: SLS notify pump (spec PR 5). Confirm event 1401 maps 1:1 to a manual Space switch before relying on it; `NSWorkspace.activeSpaceDidChangeNotification` stays the source of truth until then.
 
 ---

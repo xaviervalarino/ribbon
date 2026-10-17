@@ -77,9 +77,9 @@ public struct Config: Sendable, Codable {
         stashCorner: StashCorner = .bottomRight,
         stashSliverSize: Double = 2.0,
         spaceChangeDebounceMs: Int = 25,
-        scrollAnimationMs: Int = 100,
+        scrollAnimationMs: Int = 55,
         slideScope: SlideScope = .all,
-        resizeMode: ResizeMode = .instant,
+        resizeMode: ResizeMode = .end,
         focusTiming: FocusTiming = .end
     ) {
         self.windowGap = windowGap
