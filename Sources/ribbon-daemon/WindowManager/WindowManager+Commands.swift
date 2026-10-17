@@ -63,6 +63,23 @@ extension WindowManager {
         }
     }
 
+    /// Tracking state and what AX returns per app, to locate where discovery drops windows.
+    private func debugStateDump() -> String {
+        let topology = SpaceManager.currentTopology()
+        var lines = [
+            "axTrusted=\(AXIsProcessTrusted()) tracked=\(trackedWindows.count) currentSpace=\(currentActiveSpaceID())",
+            "topology active=\(topology.activeSpaceByDisplay) spaces=\(topology.displayBySpace.keys.sorted())",
+            "ribbons: " + ribbons.map { "\($0.key):\($0.value.columns.count)" }.sorted().joined(separator: " "),
+        ]
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            let appElem = AXElement.application(pid: app.processIdentifier)
+            let wins = appElem.windows
+            let admitted = wins.filter { admits($0) }.count
+            lines.append("  \(app.localizedName ?? "?") pid=\(app.processIdentifier) hidden=\(app.isHidden) axWindows=\(wins.count) admitted=\(admitted)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// Live-tunes slide settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
         guard args.count == 2 else { return "error: debug set slide-scope|resize-mode|slide-ms <value>" }
@@ -89,6 +106,8 @@ extension WindowManager {
             switch args.first?.lowercased() {
             case "set":
                 return applyDebugSetting(Array(args.dropFirst()))
+            case "state":
+                return debugStateDump()
             case "settings":
                 return "slide-scope=\(config.slideScope.rawValue) resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs)"
             default:

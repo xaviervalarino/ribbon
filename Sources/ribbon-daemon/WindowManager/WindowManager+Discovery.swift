@@ -27,6 +27,44 @@ extension WindowManager {
         return ids
     }
 
+    // MARK: - WindowServer Reads (no app IPC)
+    //
+    // An AX read waits in the target app's queue behind its pending slide writes, so event
+    // handlers on the main thread read geometry and stacking from WindowServer instead.
+
+    /// WindowServer's frame for a window, in the same top-left coordinates as AX.
+    func serverFrame(_ id: CGWindowID) -> CGRect? {
+        guard let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [NSDictionary],
+              let bounds = list.first?[kCGWindowBounds as String] as? NSDictionary else { return nil }
+        return CGRect(dictionaryRepresentation: bounds)
+    }
+
+    /// The app's front-most on-screen normal window, from WindowServer's front-to-back order.
+    func frontmostWindowID(pid: pid_t) -> CGWindowID? {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary] else {
+            return nil
+        }
+        for dict in list {
+            guard (dict[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid,
+                  (dict[kCGWindowLayer as String] as? NSNumber)?.intValue == 0,
+                  let num = dict[kCGWindowNumber as String] as? NSNumber else { continue }
+            return num.uint32Value
+        }
+        return nil
+    }
+
+    /// Window ID for an AX element, from the local cache before asking the app.
+    func cachedWindowID(for element: AXElement) -> CGWindowID? {
+        windowIDsByElement[element.rawElement] ?? element.windowID
+    }
+
+    /// Window ID for a tracked element, falling back to element equality when the element
+    /// no longer answers (destroyed windows).
+    func trackedWindowID(for element: AXElement) -> CGWindowID? {
+        cachedWindowID(for: element)
+            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
+    }
+
     func discoverExistingWindows() {
         reconcileWindows(sortHorizontally: true)
         syncFocusToFrontmostWindow()

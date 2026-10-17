@@ -57,20 +57,14 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func windowDestroyed(element: AXElement, pid: pid_t) {
-        guard let id = element.windowID
-            ?? windowIDsByElement[element.rawElement]
-            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
-        else { return }
+        guard let id = trackedWindowID(for: element) else { return }
         removeFromRibbon(id: id)
         forgetOriginalFrame(id: id)
         scheduleRetile()
     }
 
     public func windowMinimized(element: AXElement, pid: pid_t) {
-        guard let id = element.windowID
-            ?? windowIDsByElement[element.rawElement]
-            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
-        else { return }
+        guard let id = trackedWindowID(for: element) else { return }
         removeFromRibbon(id: id)
         scheduleRetile()
     }
@@ -84,38 +78,32 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowResized(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
-        guard let id = element.windowID
-            ?? windowIDsByElement[element.rawElement]
-            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
-        else { return }
+        guard let id = trackedWindowID(for: element) else { return }
 
+        // WindowServer bounds trail the app's resize notification by 8-13ms, so a size read here
+        // can be the pre-resize size. Any resize inside Ribbon's own echo window is ours, and a
+        // manual resize is measured again once the debounce fires, after WindowServer catches up.
         let now = observer.currentEventTime
         pendingFrameEchoes = pendingFrameEchoes.filter { $0.value >= now }
-        if let deadline = pendingFrameEchoes[id], deadline >= now {
-            if let last = lastAppliedFrames[id], let sz = element.size {
-                if abs(last.size.width - sz.width) < 2.0 && abs(last.size.height - sz.height) < 2.0 {
-                    return
-                }
-            }
-        }
-
-        guard let newSize = element.size else { return }
-        let sID = spaceByWindowID[id] ?? currentActiveSpaceID()
-        let dID = displayByWindowID[id] ?? NSScreen.main?.displayID ?? activeDisplayID ?? 0
-        guard let screen = screen(forDisplayID: dID) else { return }
-
-        if let last = lastAppliedFrames[id], abs(last.size.width - newSize.width) < 2.0 {
+        if pendingFrameEchoes[id] != nil {
             return
         }
 
+        let sID = spaceByWindowID[id] ?? currentActiveSpaceID()
+        let dID = displayByWindowID[id] ?? NSScreen.main?.displayID ?? activeDisplayID ?? 0
+        guard let screen = screen(forDisplayID: dID) else { return }
         let canvasW = screen.visibleFrame.width - (config.edgeMargin * 2)
         guard canvasW > 0 else { return }
 
-        let ratio = max(0.15, min(1.0, Double(newSize.width) / Double(canvasW)))
         resizeDebounceWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.resizeDebounceWork = nil
+            guard let newSize = self.serverFrame(id)?.size else { return }
+            if let last = self.lastAppliedFrames[id], abs(last.size.width - newSize.width) < 2.0 {
+                return
+            }
+            let ratio = max(0.15, min(1.0, Double(newSize.width) / Double(canvasW)))
             if var r = self.ribbons[sID] {
                 if r.setWidthRatio(ratio, forWindowID: id) {
                     self.ribbons[sID] = r
@@ -130,24 +118,18 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowMoved(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
-        guard let id = element.windowID
-            ?? windowIDsByElement[element.rawElement]
-            ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
-        else { return }
+        guard let id = trackedWindowID(for: element) else { return }
 
         let now = observer.currentEventTime
+        // WindowServer bounds trail the app's move notification, so inside Ribbon's own echo
+        // window a position mismatch is lag, not a manual move.
         pendingFrameEchoes = pendingFrameEchoes.filter { $0.value >= now }
-        if let deadline = pendingFrameEchoes[id], deadline >= now {
-            if let last = lastAppliedFrames[id], let pos = element.position {
-                if abs(last.origin.x - pos.x) < 2.0 && abs(last.origin.y - pos.y) < 2.0 {
-                    return
-                }
-            }
+        if pendingFrameEchoes[id] != nil {
+            return
         }
 
         // Check if window crossed display boundary
-        if let pos = element.position, let sz = element.size {
-            let currentFrame = CGRect(origin: pos, size: sz)
+        if let currentFrame = serverFrame(id) {
             if let newScreen = screen(forFrame: currentFrame) {
                 let newDID = newScreen.displayID
                 if let oldDID = displayByWindowID[id], oldDID != newDID {
@@ -171,7 +153,7 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
-        guard let id = element.windowID else { return }
+        guard let id = cachedWindowID(for: element) else { return }
 
         let now = observer.currentEventTime
         // One activation echoes twice (focused-window change, then app activation), and an
@@ -237,6 +219,11 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func applicationActivated(pid: pid_t) {
+        // The app's front window from WindowServer stacking avoids an AX round trip when it is tracked.
+        if let id = frontmostWindowID(pid: pid), let tracked = trackedWindows[id] {
+            windowFocused(element: tracked, pid: pid)
+            return
+        }
         let onScreen = onScreenWindowIDs()
         let app = AXElement.application(pid: pid)
         let candidate: AXElement? = {
