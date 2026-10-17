@@ -14,6 +14,8 @@ public enum SlideScope: String, Sendable, Codable {
 public enum ResizeMode: String, Sendable, Codable {
     /// After the slide settles.
     case end
+    /// At slide start, growing or shrinking; shrinking briefly opens a gap neighbors close.
+    case instant
     /// Growth at slide start (neighbors slide out from under it); shrinking after it settles.
     case growFirst = "grow-first"
     /// Every frame, alongside the position.
@@ -65,9 +67,9 @@ public struct Config: Sendable, Codable {
         stashCorner: StashCorner = .bottomRight,
         stashSliverSize: Double = 2.0,
         spaceChangeDebounceMs: Int = 25,
-        scrollAnimationMs: Int = 150,
+        scrollAnimationMs: Int = 100,
         slideScope: SlideScope = .all,
-        resizeMode: ResizeMode = .end
+        resizeMode: ResizeMode = .instant
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin

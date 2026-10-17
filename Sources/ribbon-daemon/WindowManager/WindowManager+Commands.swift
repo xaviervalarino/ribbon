@@ -92,7 +92,7 @@ extension WindowManager {
             guard let scope = SlideScope(rawValue: value) else { return "error: slide-scope all|focused" }
             config.slideScope = scope
         case "resize-mode":
-            guard let mode = ResizeMode(rawValue: value) else { return "error: resize-mode end|grow-first|animate" }
+            guard let mode = ResizeMode(rawValue: value) else { return "error: resize-mode end|instant|grow-first|animate" }
             config.resizeMode = mode
         case "slide-ms":
             guard let ms = Int(value), ms >= 0 else { return "error: slide-ms <milliseconds, 0 disables>" }

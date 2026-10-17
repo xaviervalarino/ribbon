@@ -229,7 +229,8 @@ extension WindowManager {
                 let startOrigin = scrollAnimator.currentOrigin(entry.id) ?? previousFrame?.origin ?? entry.frame.origin
                 let fromSize = scrollAnimator.currentSize(entry.id) ?? previousFrame?.size ?? entry.frame.size
                 let grows = entry.frame.width > fromSize.width + 0.5 || entry.frame.height > fromSize.height + 0.5
-                let growNow = needsFullFrame && grows && config.resizeMode == .growFirst
+                let resizeNow = needsFullFrame
+                    && (config.resizeMode == .instant || (config.resizeMode == .growFirst && grows))
                 let animateSize = needsFullFrame && config.resizeMode == .animate
 
                 slidesByID[entry.id] = ScrollAnimator.Slide(
@@ -249,20 +250,20 @@ extension WindowManager {
                         element: elem,
                         windowID: entry.id,
                         frame: entry.frame,
-                        needsFullFrame: needsFullFrame && !growNow
+                        needsFullFrame: needsFullFrame && !resizeNow
                     )
                 )
                 // One start mutation per window: AppDriver merges pending mutations for a window,
                 // so a separate focus mutation would carry the final frame into the grow.
-                // Growing now lets neighbors slide out from under the window instead of opening a gap.
+                // Resizing now (grow-first, instant) lets neighbors slide out from under a growing window.
                 // Focus at slide start so keystrokes reach the new window immediately.
-                if growNow || shouldFocus {
+                if resizeNow || shouldFocus {
                     mutationsByPID[entry.pid, default: []].append(AppDriver.WindowMutation(
                         element: elem,
                         windowID: entry.id,
-                        frame: CGRect(origin: startOrigin, size: growNow ? entry.frame.size : fromSize),
-                        needsFullFrame: growNow,
-                        needsMove: growNow,
+                        frame: CGRect(origin: startOrigin, size: resizeNow ? entry.frame.size : fromSize),
+                        needsFullFrame: resizeNow,
+                        needsMove: resizeNow,
                         shouldFocus: shouldFocus
                     ))
                 }
