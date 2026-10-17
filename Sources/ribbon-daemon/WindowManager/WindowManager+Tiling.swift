@@ -255,11 +255,14 @@ extension WindowManager {
                     ),
                     fromSize: animateSize ? fromSize : nil,
                     toSize: animateSize ? entry.frame.size : nil,
+                    // A resize sent at the start origin can run past the screen edge, and macOS caps the
+                    // width there. The final carries the size too; AppDriver reads the live size and
+                    // resizes again only when the start resize came up short.
                     final: AppDriver.WindowMutation(
                         element: elem,
                         windowID: entry.id,
                         frame: entry.frame,
-                        needsFullFrame: needsFullFrame && !resizeNow
+                        needsFullFrame: needsFullFrame
                     )
                 )
                 // One start mutation per window: AppDriver merges pending mutations for a window,
