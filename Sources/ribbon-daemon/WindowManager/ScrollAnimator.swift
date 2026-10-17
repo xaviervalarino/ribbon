@@ -14,6 +14,10 @@ import QuartzCore
 ///   queueing them, and its final mutation waits for that step so a stale step never lands last.
 /// - A fresh slide sends its first step immediately and holds the clock until every app has
 ///   landed it (capped), so slow apps (Electron) start with the rest of the strip.
+/// - A retarget keeps each window's current velocity and eases it onto the new target, so
+///   rapid presses read as one continuous glide instead of a stop and restart per press.
+/// - Each app is sent the position it should show when its step lands (its measured step
+///   round trip ahead), so a busy app lands in line with its neighbors instead of trailing them.
 ///
 /// Confined to the main queue: the display link, `animate`, and step completions all run there.
 final class ScrollAnimator: @unchecked Sendable {
@@ -39,6 +43,8 @@ final class ScrollAnimator: @unchecked Sendable {
         let pid: pid_t
         let element: AXElement
         var fromNatural: CGPoint
+        /// Strip velocity at the slide's start, in points per ms.
+        var fromVelocity: CGVector = .zero
         let toNatural: CGPoint
         let parking: Parking
         var fromSize: CGSize?
@@ -46,13 +52,27 @@ final class ScrollAnimator: @unchecked Sendable {
         let final: AppDriver.WindowMutation
     }
 
+    /// Times a window from its first moving step to WindowServer showing it moved, which
+    /// includes the app's redraw and commit that an AX round trip does not.
+    private struct LandingWatch {
+        let pid: pid_t
+        let startOrigin: CGPoint
+        /// The window started pinned at its stash sliver, so the slide brings it on screen.
+        let joining: Bool
+        var sentMs: Double?
+    }
+
     /// Longest the clock waits for slow apps to land the first step.
     private static let maxStartHoldMs = 50.0
+    /// Longest an app's steps run ahead; past this, the app is too busy for a lead to line it up.
+    private static let maxLeadMs = 40.0
     private static let frameMs = 1000.0 / 120.0
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
     var onIdle: (() -> Void)?
+    /// Runs when a held focus is sent, so its echoes are judged from then.
+    var onSettledFocus: ((CGWindowID, pid_t) -> Void)?
 
     private var tracks: [CGWindowID: Track] = [:]
     private var startMs: Double = 0
@@ -62,6 +82,11 @@ final class ScrollAnimator: @unchecked Sendable {
     private var fallbackTimer: DispatchSourceTimer?
     private lazy var linkTarget = DisplayLinkTarget { [weak self] in self?.tick() }
     private var inFlight: Set<pid_t> = []
+    private var sentAtMs: [pid_t: Double] = [:]
+    /// Smoothed step round trip per app, which sets how far ahead its steps run.
+    private var stepLatencyMs: [pid_t: Double] = [:]
+    private var landingWatches: [CGWindowID: LandingWatch] = [:]
+    private var settledFocus: (pid: pid_t, mutation: AppDriver.WindowMutation)?
     private var pendingFinals: [pid_t: [AppDriver.WindowMutation]] = [:]
     private var framesThisSlide = 0
     private var holdMsThisSlide = 0.0
@@ -83,7 +108,7 @@ final class ScrollAnimator: @unchecked Sendable {
     /// Where the window shows mid-slide (pinned at its sliver), or nil when not sliding.
     func currentOrigin(_ id: CGWindowID) -> CGPoint? {
         guard let track = tracks[id] else { return nil }
-        return Self.shown(track, progress: progress(at: Self.nowMs()))
+        return Self.shown(track, progress: progress(at: Self.nowMs()), durationMs: durationMs)
     }
 
     /// The window's size mid-slide when its size animates, or nil.
@@ -95,24 +120,35 @@ final class ScrollAnimator: @unchecked Sendable {
     /// The window's strip position mid-slide, or nil when not sliding.
     func currentNatural(_ id: CGWindowID) -> CGPoint? {
         guard let track = tracks[id] else { return nil }
-        return Self.natural(track, progress: progress(at: Self.nowMs()))
+        return Self.natural(track, progress: progress(at: Self.nowMs()), durationMs: durationMs)
     }
 
     /// Starts or retargets slides. Windows already sliding restart from their current strip
-    /// position, so every window shares one clock and the strip moves as a unit. Duration grows
-    /// with the longest strip distance, up to twice `baseDurationMs` for a full screen width.
+    /// position and velocity, so every window shares one clock and the strip moves as a unit.
+    /// Duration grows with the longest strip distance, up to twice `baseDurationMs` for a full
+    /// screen width.
     func animate(_ slides: [CGWindowID: Slide], baseDurationMs: Double, referenceWidth: Double) {
         let now = Self.nowMs()
         let wasActive = isActive
         let p = progress(at: now)
+        var velocities: [CGWindowID: CGVector] = [:]
         for (id, track) in tracks {
-            tracks[id]?.fromNatural = Self.natural(track, progress: p)
+            tracks[id]?.fromNatural = Self.natural(track, progress: p, durationMs: durationMs)
             tracks[id]?.fromSize = Self.size(track, progress: p)
+            velocities[id] = Self.velocity(track, progress: p, durationMs: durationMs)
         }
         for (id, slide) in slides {
-            tracks[id] = Track(pid: slide.pid, element: slide.element, fromNatural: slide.fromNatural,
-                               toNatural: slide.toNatural, parking: slide.parking,
-                               fromSize: slide.fromSize, toSize: slide.toSize, final: slide.final)
+            let track = Track(pid: slide.pid, element: slide.element, fromNatural: slide.fromNatural,
+                              toNatural: slide.toNatural, parking: slide.parking,
+                              fromSize: slide.fromSize, toSize: slide.toSize, final: slide.final)
+            // Watch windows starting from rest, including ones a retarget releases from their sliver.
+            // The loop above restarted existing tracks from their current position, so progress 0 is now.
+            if tracks[id].map(Self.isPinnedAtStart) ?? true, landingWatches[id] == nil {
+                landingWatches[id] = LandingWatch(pid: slide.pid,
+                                                  startOrigin: Self.shown(track, progress: 0, durationMs: 0),
+                                                  joining: Self.isPinnedAtStart(track))
+            }
+            tracks[id] = track
         }
         for pid in pendingFinals.keys {
             pendingFinals[pid]?.removeAll { slides[$0.windowID] != nil }
@@ -123,14 +159,24 @@ final class ScrollAnimator: @unchecked Sendable {
         }.max() ?? 0
         durationMs = baseDurationMs * (1 + min(1, longest / max(1, referenceWidth)))
         startMs = now
+        for (id, velocity) in velocities {
+            guard let track = tracks[id] else { continue }
+            tracks[id]?.fromVelocity = Self.carriedVelocity(velocity, track: track, durationMs: durationMs)
+        }
 
         guard !wasActive else { return }
         // A fresh slide (not a retarget) sends its first step now and holds the clock until it lands.
         framesThisSlide = 0
         holdMsThisSlide = 0
         holdStartMs = now
-        sendSteps(progress: progress(at: now))
+        sendSteps(at: now)
         resumeFrames()
+    }
+
+    /// Holds a focus until the strip settles; a later press replaces it, so a fast run
+    /// activates only the window it lands on.
+    func focusWhenSettled(_ mutation: AppDriver.WindowMutation, pid: pid_t) {
+        settledFocus = (pid, mutation)
     }
 
     private func resumeFrames() {
@@ -181,38 +227,93 @@ final class ScrollAnimator: @unchecked Sendable {
             startMs = now - Self.frameMs
         }
 
-        let p = progress(at: now)
-        sendSteps(progress: p)
-        if p >= 1 {
+        checkLandings(at: now)
+        sendSteps(at: now)
+        if progress(at: now) >= 1 {
             finish()
         }
     }
 
-    private func sendSteps(progress p: Double) {
-        var stepsByPID: [pid_t: [AppDriver.SlideStep]] = [:]
-        for track in tracks.values {
-            stepsByPID[track.pid, default: []].append(
-                AppDriver.SlideStep(element: track.element, origin: Self.shown(track, progress: p),
-                                    size: Self.size(track, progress: p))
-            )
+    private func sendSteps(at nowMs: Double) {
+        var tracksByPID: [pid_t: [(CGWindowID, Track)]] = [:]
+        for (id, track) in tracks where !inFlight.contains(track.pid) {
+            tracksByPID[track.pid, default: []].append((id, track))
         }
-        for (pid, steps) in stepsByPID where !inFlight.contains(pid) {
+        for (pid, pidTracks) in tracksByPID {
+            let p = progress(at: nowMs + leadMs(pid))
+            let steps = pidTracks.map { id, track in
+                let origin = Self.shown(track, progress: p, durationMs: durationMs)
+                if let watch = landingWatches[id], watch.sentMs == nil,
+                   hypot(origin.x - watch.startOrigin.x, origin.y - watch.startOrigin.y) > 1 {
+                    landingWatches[id]?.sentMs = nowMs
+                }
+                return AppDriver.SlideStep(element: track.element, origin: origin, size: Self.size(track, progress: p))
+            }
             send(steps, to: pid)
         }
     }
 
-    private func finish() {
+    /// Logs when WindowServer first shows each watched window off its start position.
+    private func checkLandings(at nowMs: Double) {
+        let sent = landingWatches.filter { $0.value.sentMs != nil }
+        guard !sent.isEmpty else { return }
+        // The window list API takes CGWindowIDs packed as raw pointer values.
+        var ids = sent.keys.map { UnsafeRawPointer(bitPattern: UInt($0)) }
+        guard let idArray = CFArrayCreate(nil, &ids, ids.count, nil),
+              let infos = CGWindowListCreateDescriptionFromArray(idArray) as? [NSDictionary] else { return }
+        for info in infos {
+            guard let num = info[kCGWindowNumber as String] as? NSNumber,
+                  let watch = sent[num.uint32Value], let sentMs = watch.sentMs,
+                  let boundsDict = info[kCGWindowBounds as String] as? NSDictionary,
+                  let bounds = CGRect(dictionaryRepresentation: boundsDict) else { continue }
+            let moved = hypot(bounds.origin.x - watch.startOrigin.x, bounds.origin.y - watch.startOrigin.y) > 1
+            guard moved || nowMs - sentMs > 500 else { continue }
+            landingWatches.removeValue(forKey: num.uint32Value)
+            logLanding(id: num.uint32Value, watch, result: moved ? "\(Int(nowMs - sentMs))ms" : "none in 500ms")
+        }
+    }
+
+    private func logLanding(id: CGWindowID, _ watch: LandingWatch, result: String) {
         RibbonLog.log(
-            "slide done windows=\(tracks.count) duration=\(Int(durationMs))ms frames=\(framesThisSlide) hold=\(Int(holdMsThisSlide))ms clock=\(displayLink != nil ? "display" : "timer")",
+            "landing pid=\(watch.pid) wid=\(id) joining=\(watch.joining) \(result) stepRTT=\(Int(stepLatencyMs[watch.pid] ?? 0))ms",
+            category: "slide"
+        )
+    }
+
+    private func leadMs(_ pid: pid_t) -> Double {
+        min(Self.maxLeadMs, stepLatencyMs[pid] ?? 0)
+    }
+
+    private func finish() {
+        let leads = Set(tracks.values.map(\.pid))
+            .filter { leadMs($0) >= 2 }
+            .sorted()
+            .map { "\($0):\(Int(leadMs($0)))ms" }
+        RibbonLog.log(
+            "slide done windows=\(tracks.count) duration=\(Int(durationMs))ms frames=\(framesThisSlide) hold=\(Int(holdMsThisSlide))ms clock=\(displayLink != nil ? "display" : "timer") lead=[\(leads.joined(separator: " "))]",
             category: "slide"
         )
         pauseFrames()
         holdStartMs = nil
+        let now = Self.nowMs()
+        checkLandings(at: now)
+        for (id, watch) in landingWatches {
+            guard let sentMs = watch.sentMs else { continue }
+            let inFlight = sentAtMs[watch.pid].map { "\(Int(now - $0))ms" } ?? "no"
+            logLanding(id: id, watch, result: "none by slide end (\(Int(now - sentMs))ms) stepInFlight=\(inFlight)")
+        }
+        landingWatches.removeAll()
         var finalsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
         for track in tracks.values {
             finalsByPID[track.pid, default: []].append(track.final)
         }
         tracks.removeAll()
+        // After the window's final in the same batch, so AppDriver merges them into one mutation.
+        if let focus = settledFocus {
+            settledFocus = nil
+            finalsByPID[focus.pid, default: []].append(focus.mutation)
+            onSettledFocus?(focus.mutation.windowID, focus.pid)
+        }
         for (pid, finals) in finalsByPID {
             if inFlight.contains(pid) {
                 pendingFinals[pid, default: []].append(contentsOf: finals)
@@ -226,6 +327,7 @@ final class ScrollAnimator: @unchecked Sendable {
 
     private func send(_ steps: [AppDriver.SlideStep], to pid: pid_t) {
         inFlight.insert(pid)
+        sentAtMs[pid] = Self.nowMs()
         let driver = driverFor(pid)
         Task { [weak self] in
             await driver.slide(steps)
@@ -235,6 +337,13 @@ final class ScrollAnimator: @unchecked Sendable {
 
     private func stepLanded(pid: pid_t) {
         inFlight.remove(pid)
+        if let sent = sentAtMs.removeValue(forKey: pid) {
+            let roundTrip = Self.nowMs() - sent
+            if roundTrip > 40 {
+                RibbonLog.log("slow step pid=\(pid) blocked \(Int(roundTrip))ms", category: "slide")
+            }
+            stepLatencyMs[pid] = stepLatencyMs[pid].map { $0 * 0.7 + roundTrip * 0.3 } ?? roundTrip
+        }
         guard let finals = pendingFinals.removeValue(forKey: pid), !finals.isEmpty else { return }
         let driver = driverFor(pid)
         Task { await driver.enqueue(finals) }
@@ -259,17 +368,59 @@ final class ScrollAnimator: @unchecked Sendable {
                       height: (from.height + (to.height - from.height) * e).rounded())
     }
 
-    private static func natural(_ track: Track, progress: Double) -> CGPoint {
-        let e = eased(progress)
-        return CGPoint(
-            x: track.fromNatural.x + (track.toNatural.x - track.fromNatural.x) * e,
-            y: track.fromNatural.y + (track.toNatural.y - track.fromNatural.y) * e
+    /// Cubic Hermite from the start position and velocity to rest at the target. From rest it is
+    /// the smoothstep ease-in-out; with a carried velocity the strip glides on without stopping.
+    private static func hermite(from: Double, velocity: Double, to: Double, t: Double, durationMs: Double) -> Double {
+        let t2 = t * t, t3 = t2 * t
+        return (2 * t3 - 3 * t2 + 1) * from + (t3 - 2 * t2 + t) * durationMs * velocity + (3 * t2 - 2 * t3) * to
+    }
+
+    /// The Hermite curve's slope, in points per ms.
+    private static func hermiteSlope(from: Double, velocity: Double, to: Double, t: Double, durationMs: Double) -> Double {
+        guard durationMs > 0 else { return 0 }
+        let t2 = t * t
+        return ((6 * t2 - 6 * t) * from + (3 * t2 - 4 * t + 1) * durationMs * velocity + (6 * t - 6 * t2) * to) / durationMs
+    }
+
+    private static func natural(_ track: Track, progress: Double, durationMs: Double) -> CGPoint {
+        CGPoint(
+            x: hermite(from: track.fromNatural.x, velocity: track.fromVelocity.dx, to: track.toNatural.x,
+                       t: progress, durationMs: durationMs),
+            y: hermite(from: track.fromNatural.y, velocity: track.fromVelocity.dy, to: track.toNatural.y,
+                       t: progress, durationMs: durationMs)
         )
     }
 
+    private static func velocity(_ track: Track, progress: Double, durationMs: Double) -> CGVector {
+        CGVector(
+            dx: hermiteSlope(from: track.fromNatural.x, velocity: track.fromVelocity.dx, to: track.toNatural.x,
+                             t: progress, durationMs: durationMs),
+            dy: hermiteSlope(from: track.fromNatural.y, velocity: track.fromVelocity.dy, to: track.toNatural.y,
+                             t: progress, durationMs: durationMs)
+        )
+    }
+
+    /// The share of a retargeted window's velocity that carries into its new slide, per axis.
+    /// Motion away from the new target stops (a reversal), and speed is capped where the curve
+    /// would overshoot the target (a Hermite to rest stays monotonic while v * T <= 3 * distance).
+    private static func carriedVelocity(_ v: CGVector, track: Track, durationMs: Double) -> CGVector {
+        func carry(_ v: Double, distance: Double) -> Double {
+            guard durationMs > 0, v * distance > 0 else { return 0 }
+            let cap = 3 * abs(distance) / durationMs
+            return min(abs(v), cap) * (v < 0 ? -1 : 1)
+        }
+        return CGVector(dx: carry(v.dx, distance: track.toNatural.x - track.fromNatural.x),
+                        dy: carry(v.dy, distance: track.toNatural.y - track.fromNatural.y))
+    }
+
+    /// True when the track starts held at a stash sliver rather than at its strip position.
+    private static func isPinnedAtStart(_ track: Track) -> Bool {
+        abs(shown(track, progress: 0, durationMs: 0).x - track.fromNatural.x.rounded()) > 1
+    }
+
     /// The strip position pinned at the window's stash slivers.
-    private static func shown(_ track: Track, progress: Double) -> CGPoint {
-        var p = natural(track, progress: progress)
+    private static func shown(_ track: Track, progress: Double, durationMs: Double) -> CGPoint {
+        var p = natural(track, progress: progress, durationMs: durationMs)
         if let maxX = track.parking.maxX { p.x = min(p.x, maxX) }
         if let minX = track.parking.minX { p.x = max(p.x, minX) }
         return CGPoint(x: p.x.rounded(), y: p.y.rounded())

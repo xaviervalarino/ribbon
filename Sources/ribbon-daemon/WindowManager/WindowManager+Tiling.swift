@@ -163,6 +163,7 @@ extension WindowManager {
         var mutationsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
         var slidesByID: [CGWindowID: ScrollAnimator.Slide] = [:]
         var focusEnqueued = false
+        var settledFocus: (pid: pid_t, mutation: AppDriver.WindowMutation)?
         let slideMs = config.scrollAnimationMs
         // Focused scope slides only the active column; every other window jumps.
         let slideOnly: Set<CGWindowID>? = config.slideScope == .focused
@@ -186,11 +187,19 @@ extension WindowManager {
                 continue
             }
 
-            let shouldFocus = entry.id == focusWindowID
-            if shouldFocus {
+            let isFocusTarget = entry.id == focusWindowID
+            if isFocusTarget {
                 focusEnqueued = true
                 // Focus lands after the driver's AX writes, so the echo window covers their latency.
-                pendingFocusEchoes[entry.id] = .now() + .milliseconds(300)
+                expectFocusEcho(id: entry.id, pid: entry.pid, ms: 300)
+            }
+            // Focus at slide end is held here and handed to the animator once the slides are known.
+            let shouldFocus = isFocusTarget && config.focusTiming == .start
+            if isFocusTarget && !shouldFocus {
+                settledFocus = (entry.pid, AppDriver.WindowMutation(
+                    element: elem, windowID: entry.id, frame: entry.frame,
+                    needsFullFrame: false, needsMove: false, shouldFocus: true
+                ))
             }
 
             // Strip positions before and after this retile; a sliding window restarts from where it is.
@@ -256,7 +265,6 @@ extension WindowManager {
                 // One start mutation per window: AppDriver merges pending mutations for a window,
                 // so a separate focus mutation would carry the final frame into the grow.
                 // Resizing now (grow-first, instant) lets neighbors slide out from under a growing window.
-                // Focus at slide start so keystrokes reach the new window immediately.
                 if resizeNow || shouldFocus {
                     mutationsByPID[entry.pid, default: []].append(AppDriver.WindowMutation(
                         element: elem,
@@ -287,6 +295,14 @@ extension WindowManager {
                 baseDurationMs: Double(slideMs),
                 referenceWidth: Double(NSScreen.main?.frame.width ?? 1500)
             )
+        }
+
+        if let focus = settledFocus {
+            if scrollAnimator.isActive {
+                scrollAnimator.focusWhenSettled(focus.mutation, pid: focus.pid)
+            } else {
+                mutationsByPID[focus.pid, default: []].append(focus.mutation)
+            }
         }
 
         // The focus target has no placement (for example, its space is not visible).

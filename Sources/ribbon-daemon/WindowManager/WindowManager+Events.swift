@@ -160,7 +160,8 @@ extension WindowManager: AXEventObserverDelegate {
         // older target's echoes can land after a newer press; all of them stay echoes until
         // the deadline.
         pendingFocusEchoes = pendingFocusEchoes.filter { $0.value >= now }
-        if pendingFocusEchoes[id] != nil {
+        pendingFocusEchoPIDs = pendingFocusEchoPIDs.filter { $0.value >= now }
+        if pendingFocusEchoes[id] != nil || pendingFocusEchoPIDs[pid] != nil {
             return
         }
 

@@ -6,12 +6,18 @@ import CoreGraphics
 extension WindowManager {
     // MARK: - Focus
 
+    func expectFocusEcho(id: CGWindowID, pid: pid_t, ms: Int) {
+        let deadline = DispatchTime.now() + .milliseconds(ms)
+        pendingFocusEchoes[id] = deadline
+        pendingFocusEchoPIDs[pid] = deadline
+    }
+
     func focusWindowDirectly(id: CGWindowID) {
         guard let elem = trackedWindows[id],
               let pid = ribbons.values.lazy
                 .flatMap({ $0.columns.flatMap(\.windows) })
                 .first(where: { $0.id == id })?.pid else { return }
-        pendingFocusEchoes[id] = .now() + .milliseconds(150)
+        expectFocusEcho(id: id, pid: pid, ms: 150)
         NSRunningApplication(processIdentifier: pid)?.activate()
         elem.focus()
     }
@@ -82,7 +88,7 @@ extension WindowManager {
 
     /// Live-tunes slide settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
-        guard args.count == 2 else { return "error: debug set slide-scope|resize-mode|slide-ms <value>" }
+        guard args.count == 2 else { return "error: debug set slide-scope|resize-mode|slide-ms|focus-timing <value>" }
         let value = args[1].lowercased()
         switch args[0].lowercased() {
         case "slide-scope":
@@ -94,6 +100,9 @@ extension WindowManager {
         case "slide-ms":
             guard let ms = Int(value), ms >= 0 else { return "error: slide-ms <milliseconds, 0 disables>" }
             config.scrollAnimationMs = ms
+        case "focus-timing":
+            guard let timing = FocusTiming(rawValue: value) else { return "error: focus-timing start|end" }
+            config.focusTiming = timing
         default:
             return "error: unknown setting '\(args[0])'"
         }
@@ -109,7 +118,7 @@ extension WindowManager {
             case "state":
                 return debugStateDump()
             case "settings":
-                return "slide-scope=\(config.slideScope.rawValue) resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs)"
+                return "slide-scope=\(config.slideScope.rawValue) resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
             default:
                 break
             }
@@ -171,7 +180,7 @@ extension WindowManager {
             activeSpaceID = targetSID
             displayBySpaceID[targetSID] = targetDID
             if let win = ribbons[targetSID]?.activeWindow, let elem = trackedWindows[win.id] {
-                pendingFocusEchoes[win.id] = .now() + .milliseconds(150)
+                expectFocusEcho(id: win.id, pid: win.pid, ms: 150)
                 NSRunningApplication(processIdentifier: win.pid)?.activate()
                 elem.focus()
             }

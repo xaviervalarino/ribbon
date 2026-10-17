@@ -106,6 +106,9 @@ public final class WindowManager {
     var lastStashedState: [CGWindowID: Bool] = [:]
     var lastNaturalFrames: [CGWindowID: CGRect] = [:]
     var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
+    /// Apps Ribbon is activating. Activation first reports the app's previously focused
+    /// window, so any focus change from these apps before the deadline is an echo.
+    var pendingFocusEchoPIDs: [pid_t: DispatchTime] = [:]
     var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
     var originalFrames: [CGWindowID: CGRect] = [:]
     var isStopped = false
@@ -191,6 +194,9 @@ public final class WindowManager {
         // Hold main-thread event handlers while a slide runs; replay them when it ends.
         observer.shouldDeferEvents = { [weak self] in self?.scrollAnimator.isActive ?? false }
         scrollAnimator.onIdle = { [weak self] in self?.observer.flushDeferredEvents() }
+        scrollAnimator.onSettledFocus = { [weak self] id, pid in
+            self?.expectFocusEcho(id: id, pid: pid, ms: 300)
+        }
 
         // Start event observer
         observer.start()

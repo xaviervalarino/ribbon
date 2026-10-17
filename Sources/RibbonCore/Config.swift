@@ -22,6 +22,15 @@ public enum ResizeMode: String, Sendable, Codable {
     case animate
 }
 
+/// When a command's focus target is activated during a slide.
+public enum FocusTiming: String, Sendable, Codable {
+    /// With the slide's first step; keystrokes reach the window at once, but every press of a
+    /// fast run activates its app mid-slide, and apps block AX calls while they redraw for it.
+    case start
+    /// Once the strip settles, so a fast run activates only the window it lands on.
+    case end
+}
+
 public struct Config: Sendable, Codable {
     public var windowGap: Double
     public var edgeMargin: Double
@@ -36,6 +45,7 @@ public struct Config: Sendable, Codable {
     public var scrollAnimationMs: Int
     public var slideScope: SlideScope
     public var resizeMode: ResizeMode
+    public var focusTiming: FocusTiming
 
     public init(
         windowGap: Double = 4.0,
@@ -69,7 +79,8 @@ public struct Config: Sendable, Codable {
         spaceChangeDebounceMs: Int = 25,
         scrollAnimationMs: Int = 100,
         slideScope: SlideScope = .all,
-        resizeMode: ResizeMode = .instant
+        resizeMode: ResizeMode = .instant,
+        focusTiming: FocusTiming = .end
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -83,6 +94,7 @@ public struct Config: Sendable, Codable {
         self.scrollAnimationMs = scrollAnimationMs
         self.slideScope = slideScope
         self.resizeMode = resizeMode
+        self.focusTiming = focusTiming
     }
 
     public static let `default` = Config()
