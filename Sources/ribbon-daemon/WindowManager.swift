@@ -104,11 +104,13 @@ public final class WindowManager {
     private var wakeObserver: NSObjectProtocol?
     var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     var lastStashedState: [CGWindowID: Bool] = [:]
+    var lastNaturalFrames: [CGWindowID: CGRect] = [:]
     var pendingFocusEchoes: [CGWindowID: DispatchTime] = [:]
     var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
     var originalFrames: [CGWindowID: CGRect] = [:]
     var isStopped = false
     var appDrivers: [pid_t: AppDriver] = [:]
+    lazy var scrollAnimator = ScrollAnimator { [unowned self] pid in self.appDriver(for: pid) }
 
     func appDriver(for pid: pid_t) -> AppDriver {
         if let driver = appDrivers[pid] {
@@ -185,6 +187,10 @@ public final class WindowManager {
         }
         try socketServer.start()
         print("[ribbon-daemon] IPC Socket listening on \(socketServer.socketPath)")
+
+        // Hold main-thread event handlers while a slide runs; replay them when it ends.
+        observer.shouldDeferEvents = { [weak self] in self?.scrollAnimator.isActive ?? false }
+        scrollAnimator.onIdle = { [weak self] in self?.observer.flushDeferredEvents() }
 
         // Start event observer
         observer.start()

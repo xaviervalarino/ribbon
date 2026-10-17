@@ -6,19 +6,24 @@ public struct WindowPlacement: Sendable {
     public let frame: CGRect
     public let quartzFrame: QuartzRect
     public let isStashed: Bool
+    /// Where the window sits on the strip before stashing; equals `frame` when not stashed.
+    /// Slides interpolate along this so off-screen windows move with their neighbors.
+    public let naturalFrame: CGRect
 
-    public init(windowID: CGWindowID, quartzFrame: QuartzRect, isStashed: Bool) {
+    public init(windowID: CGWindowID, quartzFrame: QuartzRect, isStashed: Bool, naturalFrame: CGRect? = nil) {
         self.windowID = windowID
         self.quartzFrame = quartzFrame
         self.frame = quartzFrame.cgRect
         self.isStashed = isStashed
+        self.naturalFrame = naturalFrame ?? quartzFrame.cgRect
     }
 
-    public init(windowID: CGWindowID, frame: CGRect, isStashed: Bool) {
+    public init(windowID: CGWindowID, frame: CGRect, isStashed: Bool, naturalFrame: CGRect? = nil) {
         self.windowID = windowID
         self.quartzFrame = QuartzRect(frame)
         self.frame = frame
         self.isStashed = isStashed
+        self.naturalFrame = naturalFrame ?? frame
     }
 }
 
@@ -228,7 +233,7 @@ public struct LayoutEngine: Sendable {
                     }
                 }
                 let stashedFrame = QuartzRect(origin: origin, size: tiledFrame.size)
-                return WindowPlacement(windowID: winID, quartzFrame: stashedFrame, isStashed: true)
+                return WindowPlacement(windowID: winID, quartzFrame: stashedFrame, isStashed: true, naturalFrame: tiledFrame.cgRect)
             }
         }
 

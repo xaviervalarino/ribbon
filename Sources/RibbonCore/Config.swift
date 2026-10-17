@@ -14,6 +14,8 @@ public struct Config: Sendable, Codable {
     public var stashCorner: StashCorner
     public var stashSliverSize: Double
     public var spaceChangeDebounceMs: Int
+    /// Duration of the slide for command-driven scrolls; 0 jumps windows straight to their targets.
+    public var scrollAnimationMs: Int
 
     public init(
         windowGap: Double = 4.0,
@@ -44,7 +46,8 @@ public struct Config: Sendable, Codable {
         ],
         stashCorner: StashCorner = .bottomRight,
         stashSliverSize: Double = 2.0,
-        spaceChangeDebounceMs: Int = 25
+        spaceChangeDebounceMs: Int = 25,
+        scrollAnimationMs: Int = 150
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -55,6 +58,7 @@ public struct Config: Sendable, Codable {
         self.stashCorner = stashCorner
         self.stashSliverSize = stashSliverSize
         self.spaceChangeDebounceMs = spaceChangeDebounceMs
+        self.scrollAnimationMs = scrollAnimationMs
     }
 
     public static let `default` = Config()

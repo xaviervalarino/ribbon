@@ -30,6 +30,11 @@ public final class AXEventObserver {
     private var pendingRetryPids: Set<pid_t> = []
     private var isRunning: Bool = false
     private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0]
+    /// Returns true while main-thread handlers must wait (a scroll slide is running): their AX
+    /// reads block on busy apps and would freeze the slide's frames.
+    public var shouldDeferEvents: (() -> Bool)?
+    private var deferredEvents: [String: () -> Void] = [:]
+    private var deferredOrder: [String] = []
 
     public init() {}
 
@@ -122,7 +127,40 @@ public final class AXEventObserver {
 
     @objc private func handleAppActivated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-        delegate?.applicationActivated(pid: app.processIdentifier)
+        let pid = app.processIdentifier
+        runOrDefer(key: "didActivateApplication", label: "didActivateApplication", pid: pid) { [weak self] in
+            self?.delegate?.applicationActivated(pid: pid)
+        }
+    }
+
+    private func runOrDefer(key: String, label: String, pid: pid_t, _ work: @escaping () -> Void) {
+        if shouldDeferEvents?() == true {
+            deferredOrder.removeAll { $0 == key }
+            deferredOrder.append(key)
+            deferredEvents[key] = work
+            return
+        }
+        let started = DispatchTime.now()
+        work()
+        Self.logIfSlow(label, pid: pid, since: started)
+    }
+
+    /// Runs the events held during a slide, once each, in order of their latest arrival.
+    public func flushDeferredEvents() {
+        let order = deferredOrder
+        let events = deferredEvents
+        deferredOrder.removeAll()
+        deferredEvents.removeAll()
+        for key in order {
+            events[key]?()
+        }
+    }
+
+    /// Main-thread handlers longer than 20ms stall scroll slides; name them in the log.
+    static func logIfSlow(_ event: String, pid: pid_t, since started: DispatchTime) {
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1e6
+        guard ms > 20 else { return }
+        RibbonLog.log("slow main-thread handler \(event) pid=\(pid) took \(Int(ms))ms", category: "stall")
     }
 
     @objc private func handleAppHidden(_ notification: Notification) {
@@ -162,23 +200,27 @@ public final class AXEventObserver {
             let notifString = notification as String
             DispatchQueue.main.async {
                 guard this.isRunning else { return }
-                switch notifString {
-                case kAXWindowCreatedNotification:
-                    this.delegate?.windowCreated(element: axElem, pid: pid)
-                case kAXUIElementDestroyedNotification:
-                    this.delegate?.windowDestroyed(element: axElem, pid: pid)
-                case kAXFocusedWindowChangedNotification:
-                    this.delegate?.windowFocused(element: axElem, pid: pid)
-                case kAXWindowMiniaturizedNotification:
-                    this.delegate?.windowMinimized(element: axElem, pid: pid)
-                case kAXWindowDeminiaturizedNotification:
-                    this.delegate?.windowDeminiaturized(element: axElem, pid: pid)
-                case kAXWindowResizedNotification, kAXResizedNotification:
-                    this.delegate?.windowResized(element: axElem, pid: pid)
-                case kAXWindowMovedNotification, kAXMovedNotification:
-                    this.delegate?.windowMoved(element: axElem, pid: pid)
-                default:
-                    break
+                // Later events of the same kind for the same window supersede held ones.
+                let key = "\(notifString)-\(pid)-\(CFHash(element))"
+                this.runOrDefer(key: key, label: notifString, pid: pid) {
+                    switch notifString {
+                    case kAXWindowCreatedNotification:
+                        this.delegate?.windowCreated(element: axElem, pid: pid)
+                    case kAXUIElementDestroyedNotification:
+                        this.delegate?.windowDestroyed(element: axElem, pid: pid)
+                    case kAXFocusedWindowChangedNotification:
+                        this.delegate?.windowFocused(element: axElem, pid: pid)
+                    case kAXWindowMiniaturizedNotification:
+                        this.delegate?.windowMinimized(element: axElem, pid: pid)
+                    case kAXWindowDeminiaturizedNotification:
+                        this.delegate?.windowDeminiaturized(element: axElem, pid: pid)
+                    case kAXWindowResizedNotification, kAXResizedNotification:
+                        this.delegate?.windowResized(element: axElem, pid: pid)
+                    case kAXWindowMovedNotification, kAXMovedNotification:
+                        this.delegate?.windowMoved(element: axElem, pid: pid)
+                    default:
+                        break
+                    }
                 }
             }
         }

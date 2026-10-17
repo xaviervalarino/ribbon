@@ -49,17 +49,18 @@ extension WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: work)
     }
 
-    func retileNow(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil) {
+    func retileNow(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false) {
         retileWork?.cancel()
         retileWork = nil
-        retile(allSpaces: allSpaces, focusWindowID: focusWindowID)
+        retile(allSpaces: allSpaces, focusWindowID: focusWindowID, animated: animated)
     }
 
     // MARK: - Layout & Retile
 
     /// Recomputes and applies layouts. `focusWindowID` is focused by its AppDriver
     /// after that driver's moves land, so the window is never focused while off-screen.
-    public func retile(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil) {
+    /// `animated` slides moving windows instead of jumping them (command-driven scrolls).
+    public func retile(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false) {
         guard !isDisplayReconfiguring else { return }
         guard !NSScreen.screens.isEmpty else { return }
         // In AppKit, (0, 0) is at the bottom-left of the primary display.
@@ -87,6 +88,7 @@ extension WindowManager {
         }
 
         var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
+        var naturalFrames: [CGWindowID: CGRect] = [:]
 
         let allDisplayBounds: [DisplayBounds] = NSScreen.screens.map { s in
             let full = QuartzGeometry.toQuartzRect(cocoaFrame: s.frame, primaryScreenHeight: primaryScreenHeight)
@@ -143,20 +145,25 @@ extension WindowManager {
             for placement in plan.placements {
                 guard let pid = windowPID[placement.windowID] else { continue }
                 framesToApply.append((id: placement.windowID, pid: pid, frame: placement.frame, isStashed: placement.isStashed))
+                naturalFrames[placement.windowID] = placement.naturalFrame
             }
         }
 
-        applyFrames(framesToApply, focusWindowID: focusWindowID)
+        applyFrames(framesToApply, naturalFrames: naturalFrames, focusWindowID: focusWindowID, animated: animated)
     }
 
     /// Groups window mutations by target process and dispatches them asynchronously
     /// to per-PID AppDriver actors, keeping the main thread free from AX IPC stalls.
     func applyFrames(
         _ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)],
-        focusWindowID: CGWindowID? = nil
+        naturalFrames: [CGWindowID: CGRect] = [:],
+        focusWindowID: CGWindowID? = nil,
+        animated: Bool = false
     ) {
         var mutationsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
+        var slidesByID: [CGWindowID: ScrollAnimator.Slide] = [:]
         var focusEnqueued = false
+        let slideMs = config.scrollAnimationMs
 
         for entry in frames {
             var elem = trackedWindows[entry.id]
@@ -182,6 +189,17 @@ extension WindowManager {
                 pendingFocusEchoes[entry.id] = .now() + .milliseconds(300)
             }
 
+            // Strip positions before and after this retile; a sliding window restarts from where it is.
+            let previousFrame = lastAppliedFrames[entry.id]
+            let wasStashed = lastStashedState[entry.id] ?? false
+            let natural = naturalFrames[entry.id] ?? entry.frame
+            let previousNatural = scrollAnimator.currentNatural(entry.id)
+                ?? lastNaturalFrames[entry.id]?.origin
+                ?? previousFrame?.origin
+            lastNaturalFrames[entry.id] = natural
+            // Windows already sliding keep sliding when retargeted, so a jump never races a slide.
+            let slides = slideMs > 0 && (animated || scrollAnimator.isAnimating(entry.id))
+
             var needsFullFrame = true
             var needsMove = true
             if let last = lastAppliedFrames[entry.id] {
@@ -199,7 +217,40 @@ extension WindowManager {
             if needsMove {
                 lastStashedState[entry.id] = entry.isStashed
                 lastAppliedFrames[entry.id] = entry.frame
-                pendingFrameEchoes[entry.id] = .now() + .milliseconds(200)
+                pendingFrameEchoes[entry.id] = .now() + .milliseconds(200 + (slides ? slideMs : 0))
+            }
+
+            if slides, needsMove, let fromNatural = previousNatural {
+                slidesByID[entry.id] = ScrollAnimator.Slide(
+                    pid: entry.pid,
+                    element: elem,
+                    fromNatural: fromNatural,
+                    toNatural: natural.origin,
+                    parking: slideParking(
+                        from: wasStashed ? previousFrame : nil,
+                        fromNatural: fromNatural,
+                        to: entry.isStashed ? entry.frame : nil,
+                        toNatural: natural.origin
+                    ),
+                    final: AppDriver.WindowMutation(
+                        element: elem,
+                        windowID: entry.id,
+                        frame: entry.frame,
+                        needsFullFrame: needsFullFrame
+                    )
+                )
+                // Focus at slide start so keystrokes reach the new window immediately.
+                if shouldFocus {
+                    mutationsByPID[entry.pid, default: []].append(AppDriver.WindowMutation(
+                        element: elem,
+                        windowID: entry.id,
+                        frame: entry.frame,
+                        needsFullFrame: false,
+                        needsMove: false,
+                        shouldFocus: true
+                    ))
+                }
+                continue
             }
 
             let mutation = AppDriver.WindowMutation(
@@ -213,6 +264,14 @@ extension WindowManager {
             mutationsByPID[entry.pid, default: []].append(mutation)
         }
 
+        if !slidesByID.isEmpty {
+            scrollAnimator.animate(
+                slidesByID,
+                baseDurationMs: Double(slideMs),
+                referenceWidth: Double(NSScreen.main?.frame.width ?? 1500)
+            )
+        }
+
         // The focus target has no placement (for example, its space is not visible).
         if let id = focusWindowID, !focusEnqueued {
             focusWindowDirectly(id: id)
@@ -224,5 +283,28 @@ extension WindowManager {
                 await driver.enqueue(mutations)
             }
         }
+    }
+
+    /// Pins a sliding window at the stash sliver of each stashed end while its strip position
+    /// lies beyond it. Top/bottom stashes (adjacent displays) leave the strip's row, so they get
+    /// no pin; the final mutation lands those windows at their sliver.
+    private func slideParking(
+        from parkedFrom: CGRect?,
+        fromNatural: CGPoint,
+        to parkedTo: CGRect?,
+        toNatural: CGPoint
+    ) -> ScrollAnimator.Parking {
+        var parking = ScrollAnimator.Parking()
+        func pin(_ parked: CGRect?, natural: CGPoint) {
+            guard let parked, abs(parked.minY - natural.y) < 0.5 else { return }
+            if parked.minX < natural.x {
+                parking.maxX = parked.minX
+            } else if parked.minX > natural.x {
+                parking.minX = parked.minX
+            }
+        }
+        pin(parkedFrom, natural: fromNatural)
+        pin(parkedTo, natural: toNatural)
+        return parking
     }
 }

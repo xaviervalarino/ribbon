@@ -37,6 +37,24 @@ public actor AppDriver {
         }
     }
 
+    public struct SlideStep: Sendable {
+        public let element: AXElement
+        public let origin: CGPoint
+
+        public init(element: AXElement, origin: CGPoint) {
+            self.element = element
+            self.origin = origin
+        }
+    }
+
+    /// Writes intermediate slide positions; the final mutation does logging and size bookkeeping.
+    public func slide(_ steps: [SlideStep]) {
+        for step in steps {
+            _ = step.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
+            step.element.position = step.origin
+        }
+    }
+
     private var pendingMutations: [CGWindowID: WindowMutation] = [:]
     private var lastAppliedSizes: [CGWindowID: CGSize] = [:]
     private var isDraining: Bool = false

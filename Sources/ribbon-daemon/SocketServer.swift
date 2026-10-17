@@ -159,7 +159,9 @@ public final class SocketServer {
             let bytesRead = read(clientFD, &buffer, buffer.count - 1)
             if bytesRead > 0 {
                 let command = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+                let started = DispatchTime.now()
                 let response = (self?.onCommand?(command) ?? "ok") + "\n"
+                AXEventObserver.logIfSlow("command '\(command)'", pid: getpid(), since: started)
                 response.withCString { cstr in
                     _ = write(clientFD, cstr, strlen(cstr))
                 }

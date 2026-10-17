@@ -73,7 +73,20 @@ extension WindowManager {
         }
     }
 
+    /// Tracked ribbon windows currently on screen, snapshotted on the main thread for debug probes.
+    private func debugProbeTargets() -> [DebugProbes.Target] {
+        let onScreen = onScreenWindowIDs() ?? []
+        return ribbons.values.flatMap { $0.columns.flatMap(\.windows) }.compactMap { win in
+            guard onScreen.contains(win.id), let elem = trackedWindows[win.id] else { return nil }
+            let app = NSRunningApplication(processIdentifier: win.pid)?.localizedName ?? "pid \(win.pid)"
+            return DebugProbes.Target(id: win.id, pid: win.pid, app: app, element: elem)
+        }
+    }
+
     public func handleCommand(_ command: String) -> String {
+        if command.lowercased().hasPrefix("debug") {
+            return DebugProbes.run(command.split(separator: " ").dropFirst().map(String.init), targets: debugProbeTargets())
+        }
         let sID = currentActiveSpaceID()
         syncFocusedWindowToRibbon(spaceID: sID)
 
@@ -186,7 +199,7 @@ extension WindowManager {
         )
 
         let newActive = ribbon.activeWindow?.id
-        retileNow(focusWindowID: newActive != previousActive ? newActive : nil)
+        retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: true)
         return "ok"
     }
 }
