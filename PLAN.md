@@ -38,6 +38,13 @@ A native macOS scrollable tiling window manager (Niri/PaperWM-style 1D column st
 - Chrome/Electron/Firefox: reading AX sets `AXEnhancedUserInterface=true`, which breaks `setFrame` — clear it around every frame write ([Rectangle #912](https://github.com/rxhanson/Rectangle/issues/912)).
 - AX *resize* runs at ~10fps; moves are fast. During any scroll animation: position-only writes, resize on settle.
 
+### Known macOS constraints (verified 2026-10-16, Darwin 25.6)
+- **SkyLight cannot move other apps' windows.** `SLSMoveWindowWithGroup` returns 0 but WindowServer drops the move for windows the caller does not own; the caller's own windows do move (probe: WezTerm unmoved, own `NSWindow` moved 40pt). Only the Dock connection can move foreign windows (yabai scripting addition, SIP partly off). Never trust a SkyLight return code: read bounds back with `CGWindowListCopyWindowInfo`.
+- `AXUIElementSetMessagingTimeout` applies to one object only (HIServices `AXUIElement.h`: "sets it only for that object"). Window elements obtained from an app element fall back to the global default, not the app element's 250ms.
+- Capturing another app's window needs Screen Recording. Unpermitted, `SLSHWCaptureWindowList` returns no images, `CGWindowListCreateImage` returns nil, and ScreenCaptureKit throws `-3801`. `SLSHWCaptureWindowList` returns only the on-screen clip of a parked window. Rendering captured pixels costs 12–41ms per window, 24–150ms for five (probe, own windows).
+- `SLSRegisterConnectionNotifyProc` fires for a normal process (SIP on, no injection) once `NSApplication` is initialised. Per-window events (804 window destroyed) fire only after `SLSRequestNotificationsForWindows` for those window ids, refreshed as windows come and go (as yabai does on Sequoia/Tahoe, `src/yabai.c`). Registration returns 0 for any event code, so confirm by callback.
+- Swift's cooperative pool is capped at the core count and does not grow when threads block: with 8+ actors blocked, a healthy actor waited 1.5s; with 32, 7.5s (probe, `usleep` stand-ins on 8 cores).
+
 ### Reusable prior art (licenses checked)
 - **AXSwift** (MIT) — AX wrapper patterns to port; add the `_AXUIElementGetWindow` extern ourselves.
 - **paneru** (MIT, Rust) — Niri-style strip on macOS; port sliver/stash logic directly.
@@ -107,6 +114,8 @@ Other confirmed defects (full review in git history / session notes): destroy no
 - [x] Stack height: even split for MVP; clamp so stacks never overflow the screen (min-height floor currently marches past the bottom edge).
 - [x] Adopt manual mouse resizes into the column width ratio (observe `kAXResized` from user, via the echo ledger); manual moves snap back on next retile.
 - [x] Test `focus up/down`, `slurp`, `barf`.
+- [ ] Column jumps for long ribbons: `focus first|last` and `move first|last` (move the active column to the strip's start or end). One long slide each; with focus at slide end only the landing window activates.
+- [ ] Window tags: mark a window with a tag, then `focus tag <name>` jumps to it from anywhere in the ribbon.
 
 ### Phase 5: Integration
 - [x] Karabiner: replace Hammerspoon calls in `karabiner.edn` with `~/dev/ribbon/bin/ribbon ...`.
@@ -120,6 +129,27 @@ Other confirmed defects (full review in git history / session notes): destroy no
 - [ ] LaunchAgent plist / login item; README corrections.
 - [ ] Config gains user-editable ignore rules (bundle id + title regex).
 - [ ] v2 candidates: event-push IPC (bars/borders, stashed-sliver exclusion), manual float toggle, drag-to-reorder columns, keep-slot option for hidden windows, **sessionized layouts** (save/restore named ribbon sessions via window descriptors), native workspace switching, scroll animation (CADisplayLink, position-only writes).
+
+### Phase 7: Ribbon 2.0 corrections (2026-10-16)
+The Ribbon 2.0 spec (agy session notes, not in repo) drove commits `6a37dd4`..`6bbcd9b`. Its SkyLight premise is false (see constraints above), and its performance figures were never measured.
+
+**Cut from the spec:** the SkyLight move fast path (PR 3); trackpad gestures fed into `SLSMoveWindowWithGroup` (§4.1); the 85% IPC, 120Hz, <1.2ms and <0.4ms figures; the 16-byte binary IPC (`ribbon status` round trip measured 7.5ms median against 2.3ms for spawning `/usr/bin/true`, and command-to-AX-resize took 33–75ms in the 2026-10-16 daemon log, so text parsing is not the bottleneck); the "theorems" as proofs (keep them as invariants backed by tests). A capture-based curtain for smooth scrolling is rejected: it needs Screen Recording, freezes live content, and adds 25–150ms before the first frame.
+
+**Process:** verify each PR's metric by reading the result back before the next PR builds on it.
+
+- [x] Pure translations use one AX position write; the focus target is focused by its AppDriver after its move lands; `AXEnhancedUserInterface` stays off unless VoiceOver runs (`47587aa`).
+- [ ] Give `AppDriver` a serial executor (`DispatchSerialQueue`, as the spec describes) so blocked AX calls do not hold cooperative-pool threads.
+- [ ] Coalesce in `AppDriver`: an actor runs `drainQueue` to completion per message, so `isDraining` is never true and queued retiles against a hung app each pay a full drain. Stamp mutations with a retile generation and drop older ones.
+- [ ] Move the applied-frame cache into the drivers, or report failures back: AX write results are discarded, so a timed-out write is cached as applied and never resent.
+- [ ] Remove main-thread AX reads (`syncFocusedWindowToRibbon`, `applicationActivated`, `reconcileWindows`, on-demand re-track, event-handler size/position reads): route through drivers or use `CGWindowListCopyWindowInfo`. Set the 250ms timeout on every window element when it is tracked.
+- [ ] Cache `AXEnhancedUserInterface` per PID instead of reading it every batch.
+- [ ] Top/bottom stash edges contradict the Phase 3 note on title-bar clamping (`FreeEdgeStashEngine.swift` `.top` parks at `minY - h + 1`): verify on hardware or restrict stashing to left/right.
+- [ ] Delete `SkyLightBridge.moveWindow` (unused since `47587aa`).
+- [ ] Measure the floor: AX position-write latency per app class (AppKit, Electron, Firefox) and keypress-to-last-write, before any smoothness work.
+- [ ] Experiment: atomic cut. Wrap a batch in `SLSDisableUpdate`/`SLSReenableUpdate` on Ribbon's connection and await all drivers (~100ms cap); confirm it freezes compositing globally so every window jumps in one frame.
+- [ ] Experiment: slide only the focused column with ~10 AX position writes over ≤180ms (PaperWM.spoon approach); expect lag on Electron.
+- [ ] Experiment: trackpad follow (spec §4.1 reworked) with throttled AX position writes, one per frame per visible window, from a `CGEventTap` on continuous scroll events.
+- [ ] Experiment: SLS notify pump (spec PR 5). Confirm event 1401 maps 1:1 to a manual Space switch before relying on it; `NSWorkspace.activeSpaceDidChangeNotification` stays the source of truth until then.
 
 ---
 
