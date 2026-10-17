@@ -53,26 +53,6 @@ extension WindowManager {
 
     // MARK: - IPC Command Handling
 
-    func syncFocusedWindowToRibbon(spaceID sID: SpaceID) {
-        guard var r = ribbons[sID], !r.columns.isEmpty else { return }
-        guard let frontApp = NSWorkspace.shared.frontmostApplication else { return }
-        let appElem = AXElement.application(pid: frontApp.processIdentifier)
-        guard let focusedWin = appElem.focusedWindow,
-              let focusedWID = focusedWin.windowID else { return }
-
-        for (cIdx, col) in r.columns.enumerated() {
-            if let rIdx = col.windows.firstIndex(where: { $0.id == focusedWID }) {
-                if r.activeColumnIndex != cIdx || r.columns[cIdx].activeRowIndex != rIdx {
-                    RibbonLog.log("Synced activeColumnIndex \(r.activeColumnIndex)->\(cIdx) to match macOS focused window \(focusedWID) (\(frontApp.localizedName ?? ""))", category: "focus")
-                    r.activeColumnIndex = cIdx
-                    r.columns[cIdx].activeRowIndex = rIdx
-                    ribbons[sID] = r
-                }
-                return
-            }
-        }
-    }
-
     /// Tracked ribbon windows currently on screen, snapshotted on the main thread for debug probes.
     private func debugProbeTargets() -> [DebugProbes.Target] {
         let onScreen = onScreenWindowIDs() ?? []
@@ -116,8 +96,9 @@ extension WindowManager {
             }
             return DebugProbes.run(command.split(separator: " ").dropFirst().map(String.init), targets: debugProbeTargets())
         }
+        // Commands act on the ribbon's own active column: macOS focus lags while the previous
+        // command's activation is in flight. Clicks reach the ribbon as focus events.
         let sID = currentActiveSpaceID()
-        syncFocusedWindowToRibbon(spaceID: sID)
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }

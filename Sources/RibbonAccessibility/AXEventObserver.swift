@@ -35,6 +35,13 @@ public final class AXEventObserver {
     public var shouldDeferEvents: (() -> Bool)?
     private var deferredEvents: [String: () -> Void] = [:]
     private var deferredOrder: [String] = []
+    private var replayingArrival: DispatchTime?
+
+    /// When the event being handled arrived. Echo checks compare deadlines against this, so an
+    /// event held during a slide is judged by when it happened, not when it was replayed.
+    public var currentEventTime: DispatchTime {
+        replayingArrival ?? .now()
+    }
 
     public init() {}
 
@@ -135,9 +142,16 @@ public final class AXEventObserver {
 
     private func runOrDefer(key: String, label: String, pid: pid_t, _ work: @escaping () -> Void) {
         if shouldDeferEvents?() == true {
+            let arrival = DispatchTime.now()
             deferredOrder.removeAll { $0 == key }
             deferredOrder.append(key)
-            deferredEvents[key] = work
+            deferredEvents[key] = { [weak self] in
+                self?.replayingArrival = arrival
+                let started = DispatchTime.now()
+                work()
+                Self.logIfSlow("\(label) (replayed)", pid: pid, since: started)
+                self?.replayingArrival = nil
+            }
             return
         }
         let started = DispatchTime.now()

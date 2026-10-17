@@ -89,7 +89,7 @@ extension WindowManager: AXEventObserverDelegate {
             ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
         else { return }
 
-        let now = DispatchTime.now()
+        let now = observer.currentEventTime
         pendingFrameEchoes = pendingFrameEchoes.filter { $0.value >= now }
         if let deadline = pendingFrameEchoes[id], deadline >= now {
             if let last = lastAppliedFrames[id], let sz = element.size {
@@ -135,7 +135,7 @@ extension WindowManager: AXEventObserverDelegate {
             ?? trackedWindows.first(where: { CFEqual($0.value.rawElement, element.rawElement) })?.key
         else { return }
 
-        let now = DispatchTime.now()
+        let now = observer.currentEventTime
         pendingFrameEchoes = pendingFrameEchoes.filter { $0.value >= now }
         if let deadline = pendingFrameEchoes[id], deadline >= now {
             if let last = lastAppliedFrames[id], let pos = element.position {
@@ -173,9 +173,12 @@ extension WindowManager: AXEventObserverDelegate {
     public func windowFocused(element: AXElement, pid: pid_t) {
         guard let id = element.windowID else { return }
 
-        let now = DispatchTime.now()
+        let now = observer.currentEventTime
+        // One activation echoes twice (focused-window change, then app activation), and an
+        // older target's echoes can land after a newer press; all of them stay echoes until
+        // the deadline.
         pendingFocusEchoes = pendingFocusEchoes.filter { $0.value >= now }
-        if pendingFocusEchoes.removeValue(forKey: id) != nil {
+        if pendingFocusEchoes[id] != nil {
             return
         }
 
@@ -223,6 +226,7 @@ extension WindowManager: AXEventObserverDelegate {
             let oldRow = r.activeColumn?.activeRowIndex
             if r.focus(windowID: id) {
                 if r.activeColumnIndex != oldActive || r.activeColumn?.activeRowIndex != oldRow || (wasOverview && isVisibleSpace) {
+                    RibbonLog.log("focus event moved activeColumn \(oldActive)->\(r.activeColumnIndex) to wid=\(id) pid=\(pid)", category: "focus")
                     ribbons[sID] = r
                     if isVisibleSpace {
                         scheduleRetile()
