@@ -39,6 +39,15 @@ extension WindowManager {
     }
 }
 
+/// Carries a weak WindowManager reference through a Task; only read it back on the main queue.
+private struct MainThreadRef: @unchecked Sendable {
+    weak var value: WindowManager?
+
+    init(_ value: WindowManager) {
+        self.value = value
+    }
+}
+
 // MARK: - AXEventObserverDelegate
 
 extension WindowManager: AXEventObserverDelegate {
@@ -153,9 +162,15 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
-        guard let id = cachedWindowID(for: element) else { return }
+        windowFocused(element: element, pid: pid, windowID: nil, arrival: nil)
+    }
 
-        let now = observer.currentEventTime
+    /// `windowID` and `arrival` come from a lookup that ran off the main thread: the ID saves an
+    /// AX read, and echo checks judge the event by when it arrived rather than when it was answered.
+    func windowFocused(element: AXElement, pid: pid_t, windowID: CGWindowID?, arrival: DispatchTime?) {
+        guard let id = windowID ?? cachedWindowID(for: element) else { return }
+
+        let now = arrival ?? observer.currentEventTime
         // One activation echoes twice (focused-window change, then app activation), and an
         // older target's echoes can land after a newer press; all of them stay echoes until
         // the deadline.
@@ -220,45 +235,38 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func applicationActivated(pid: pid_t) {
+        // Ignored apps never join a ribbon, so their activation has nothing to look up.
+        if let name = NSRunningApplication(processIdentifier: pid)?.localizedName,
+           config.ignoredApps.contains(name) {
+            return
+        }
         // The app's front window from WindowServer stacking avoids an AX round trip when it is tracked.
         if let id = frontmostWindowID(pid: pid), let tracked = trackedWindows[id] {
             windowFocused(element: tracked, pid: pid)
             return
         }
-        let onScreen = onScreenWindowIDs()
-        let app = AXElement.application(pid: pid)
-        let candidate: AXElement? = {
-            if let focused = app.focusedWindow,
-               let id = focused.windowID,
-               onScreen?.contains(id) ?? true {
-                return focused
-            }
-            return app.windows.first { win in
-                guard let id = win.windowID else { return false }
-                return onScreen?.contains(id) ?? false
-            }
-        }()
+        lookUpFrontWindow(pid: pid, arrival: observer.currentEventTime, retry: true)
+    }
 
-        if let focused = candidate {
-            windowFocused(element: focused, pid: pid)
-        } else {
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
-                guard let self, !self.isStopped else { return }
-                let onScreenRetry = self.onScreenWindowIDs()
-                let retryApp = AXElement.application(pid: pid)
-                let retryCandidate: AXElement? = {
-                    if let focused = retryApp.focusedWindow,
-                       let id = focused.windowID,
-                       onScreenRetry?.contains(id) ?? true {
-                        return focused
+    /// Asks the app's driver for its front window; an app redrawing for activation answers in
+    /// 30-350ms. The answer is judged by the activation's arrival time and dropped once another
+    /// app is frontmost. An app with no window on screen yet is asked once more after 100ms.
+    private func lookUpFrontWindow(pid: pid_t, arrival: DispatchTime, retry: Bool) {
+        let onScreen = onScreenWindowIDs()
+        let driver = appDriver(for: pid)
+        let manager = MainThreadRef(self)
+        Task {
+            let front = await driver.frontWindow(onScreen: onScreen)
+            DispatchQueue.main.async {
+                guard let self = manager.value, !self.isStopped,
+                      NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else { return }
+                if let front {
+                    self.windowFocused(element: front.element, pid: pid, windowID: front.windowID, arrival: arrival)
+                } else if retry {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(100)) { [weak self] in
+                        guard let self, !self.isStopped else { return }
+                        self.lookUpFrontWindow(pid: pid, arrival: arrival, retry: false)
                     }
-                    return retryApp.windows.first { win in
-                        guard let id = win.windowID else { return false }
-                        return onScreenRetry?.contains(id) ?? false
-                    }
-                }()
-                if let focused = retryCandidate {
-                    self.windowFocused(element: focused, pid: pid)
                 }
             }
         }

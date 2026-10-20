@@ -75,6 +75,20 @@ public actor AppDriver {
         }
     }
 
+    /// The app's focused window when WindowServer shows it, else its first window on screen.
+    /// An app redrawing for activation answers slowly, so callers run this off the main thread.
+    public func frontWindow(onScreen: Set<CGWindowID>?) -> (element: AXElement, windowID: CGWindowID)? {
+        let app = AXElement.application(pid: pid)
+        _ = app.setMessagingTimeout(Self.defaultTimeoutSeconds)
+        if let focused = app.focusedWindow, let id = focused.windowID, onScreen?.contains(id) ?? true {
+            return (focused, id)
+        }
+        for win in app.windows {
+            if let id = win.windowID, onScreen?.contains(id) ?? false { return (win, id) }
+        }
+        return nil
+    }
+
     private var pendingMutations: [CGWindowID: WindowMutation] = [:]
     private var lastAppliedSizes: [CGWindowID: CGSize] = [:]
     private var isDraining: Bool = false
