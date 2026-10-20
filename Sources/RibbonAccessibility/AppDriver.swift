@@ -45,18 +45,15 @@ public actor AppDriver {
         public let element: AXElement
         public let windowID: CGWindowID
         public let origin: CGPoint
-        /// Set only when the slide animates size; each step then costs a full AX resize.
-        public let size: CGSize?
 
-        public init(element: AXElement, windowID: CGWindowID, origin: CGPoint, size: CGSize? = nil) {
+        public init(element: AXElement, windowID: CGWindowID, origin: CGPoint) {
             self.element = element
             self.windowID = windowID
             self.origin = origin
-            self.size = size
         }
     }
 
-    /// Writes intermediate slide frames; the final mutation does logging and size bookkeeping.
+    /// Writes intermediate slide positions; the final mutation does logging and size bookkeeping.
     public func slide(_ steps: [SlideStep]) {
         for step in steps {
             // A resize the window has not started yet would stall this slide; the slide's own final resizes it.
@@ -67,11 +64,7 @@ public actor AppDriver {
                     : nil
             }
             _ = step.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
-            if let size = step.size {
-                step.element.setFrame(CGRect(origin: step.origin, size: size))
-            } else {
-                step.element.position = step.origin
-            }
+            step.element.position = step.origin
         }
     }
 

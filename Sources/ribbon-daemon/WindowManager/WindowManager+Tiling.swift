@@ -165,10 +165,6 @@ extension WindowManager {
         var focusEnqueued = false
         var settledFocus: (pid: pid_t, mutation: AppDriver.WindowMutation)?
         let slideMs = config.scrollAnimationMs
-        // Focused scope slides only the active column; every other window jumps.
-        let slideOnly: Set<CGWindowID>? = config.slideScope == .focused
-            ? focusedColumnWindowIDs(focusWindowID: focusWindowID)
-            : nil
 
         for entry in frames {
             var elem = trackedWindows[entry.id]
@@ -211,8 +207,7 @@ extension WindowManager {
                 ?? previousFrame?.origin
             lastNaturalFrames[entry.id] = natural
             // Windows already sliding keep sliding when retargeted, so a jump never races a slide.
-            let inScope = slideOnly?.contains(entry.id) ?? true
-            let slides = slideMs > 0 && ((animated && inScope) || scrollAnimator.isAnimating(entry.id))
+            let slides = slideMs > 0 && (animated || scrollAnimator.isAnimating(entry.id))
 
             var needsFullFrame = true
             var needsMove = true
@@ -236,11 +231,10 @@ extension WindowManager {
 
             if slides, needsMove, let fromNatural = previousNatural {
                 let startOrigin = scrollAnimator.currentOrigin(entry.id) ?? previousFrame?.origin ?? entry.frame.origin
-                let fromSize = scrollAnimator.currentSize(entry.id) ?? previousFrame?.size ?? entry.frame.size
+                let fromSize = previousFrame?.size ?? entry.frame.size
                 let grows = entry.frame.width > fromSize.width + 0.5 || entry.frame.height > fromSize.height + 0.5
                 let resizeNow = needsFullFrame
                     && (config.resizeMode == .instant || (config.resizeMode == .growFirst && grows))
-                let animateSize = needsFullFrame && config.resizeMode == .animate
 
                 slidesByID[entry.id] = ScrollAnimator.Slide(
                     pid: entry.pid,
@@ -253,8 +247,6 @@ extension WindowManager {
                         to: entry.isStashed ? entry.frame : nil,
                         toNatural: natural.origin
                     ),
-                    fromSize: animateSize ? fromSize : nil,
-                    toSize: animateSize ? entry.frame.size : nil,
                     // A resize sent at the start origin can run past the screen edge, and macOS caps the
                     // width there. The final carries the size too; AppDriver reads the live size and
                     // resizes again only when the start resize came up short.
@@ -320,18 +312,6 @@ extension WindowManager {
                 await driver.enqueue(mutations)
             }
         }
-    }
-
-    /// Windows in the column holding the focus target, or the current ribbon's active column.
-    private func focusedColumnWindowIDs(focusWindowID: CGWindowID?) -> Set<CGWindowID> {
-        if let id = focusWindowID {
-            for r in ribbons.values {
-                if let col = r.columns.first(where: { $0.windows.contains { $0.id == id } }) {
-                    return Set(col.windows.map(\.id))
-                }
-            }
-        }
-        return Set(ribbon.activeColumn?.windows.map(\.id) ?? [])
     }
 
     /// Pins a sliding window at the stash sliver of each stashed end while its strip position

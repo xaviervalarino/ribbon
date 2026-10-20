@@ -88,14 +88,11 @@ extension WindowManager {
 
     /// Live-tunes slide settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
-        guard args.count == 2 else { return "error: debug set slide-scope|resize-mode|slide-ms|focus-timing <value>" }
+        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing <value>" }
         let value = args[1].lowercased()
         switch args[0].lowercased() {
-        case "slide-scope":
-            guard let scope = SlideScope(rawValue: value) else { return "error: slide-scope all|focused" }
-            config.slideScope = scope
         case "resize-mode":
-            guard let mode = ResizeMode(rawValue: value) else { return "error: resize-mode end|instant|grow-first|animate" }
+            guard let mode = ResizeMode(rawValue: value) else { return "error: resize-mode end|instant|grow-first" }
             config.resizeMode = mode
         case "slide-ms":
             guard let ms = Int(value), ms >= 0 else { return "error: slide-ms <milliseconds, 0 disables>" }
@@ -118,7 +115,7 @@ extension WindowManager {
             case "state":
                 return debugStateDump()
             case "settings":
-                return "slide-scope=\(config.slideScope.rawValue) resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
+                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
             default:
                 break
             }

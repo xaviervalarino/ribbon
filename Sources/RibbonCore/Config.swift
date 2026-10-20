@@ -4,12 +4,6 @@ public enum StashCorner: String, Sendable, Codable {
     case bottomRight, bottomLeft, topRight, topLeft
 }
 
-/// Which windows slide on a command-driven scroll; the rest jump to their targets.
-public enum SlideScope: String, Sendable, Codable {
-    case all
-    case focused
-}
-
 /// When a sliding window's size change is applied.
 public enum ResizeMode: String, Sendable, Codable {
     /// After the slide settles.
@@ -18,8 +12,6 @@ public enum ResizeMode: String, Sendable, Codable {
     case instant
     /// Growth at slide start (neighbors slide out from under it); shrinking after it settles.
     case growFirst = "grow-first"
-    /// Every frame, alongside the position.
-    case animate
 }
 
 /// When a command's focus target is activated during a slide.
@@ -43,7 +35,6 @@ public struct Config: Sendable, Codable {
     public var spaceChangeDebounceMs: Int
     /// Duration of the slide for command-driven scrolls; 0 jumps windows straight to their targets.
     public var scrollAnimationMs: Int
-    public var slideScope: SlideScope
     public var resizeMode: ResizeMode
     public var focusTiming: FocusTiming
 
@@ -78,7 +69,6 @@ public struct Config: Sendable, Codable {
         stashSliverSize: Double = 2.0,
         spaceChangeDebounceMs: Int = 25,
         scrollAnimationMs: Int = 55,
-        slideScope: SlideScope = .all,
         resizeMode: ResizeMode = .end,
         focusTiming: FocusTiming = .end
     ) {
@@ -92,7 +82,6 @@ public struct Config: Sendable, Codable {
         self.stashSliverSize = stashSliverSize
         self.spaceChangeDebounceMs = spaceChangeDebounceMs
         self.scrollAnimationMs = scrollAnimationMs
-        self.slideScope = slideScope
         self.resizeMode = resizeMode
         self.focusTiming = focusTiming
     }
