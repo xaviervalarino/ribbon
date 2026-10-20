@@ -89,6 +89,7 @@ extension WindowManager {
 
         var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
         var naturalFrames: [CGWindowID: CGRect] = [:]
+        var displayFrames: [CGWindowID: CGRect] = [:]
 
         let allDisplayBounds: [DisplayBounds] = NSScreen.screens.map { s in
             let full = QuartzGeometry.toQuartzRect(cocoaFrame: s.frame, primaryScreenHeight: primaryScreenHeight)
@@ -146,10 +147,12 @@ extension WindowManager {
                 guard let pid = windowPID[placement.windowID] else { continue }
                 framesToApply.append((id: placement.windowID, pid: pid, frame: placement.frame, isStashed: placement.isStashed))
                 naturalFrames[placement.windowID] = placement.naturalFrame
+                displayFrames[placement.windowID] = screenFullQuartzFrame.cgRect
             }
         }
 
-        applyFrames(framesToApply, naturalFrames: naturalFrames, focusWindowID: focusWindowID, animated: animated)
+        applyFrames(framesToApply, naturalFrames: naturalFrames, displayFrames: displayFrames,
+                    focusWindowID: focusWindowID, animated: animated)
     }
 
     /// Groups window mutations by target process and dispatches them asynchronously
@@ -157,6 +160,7 @@ extension WindowManager {
     func applyFrames(
         _ frames: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)],
         naturalFrames: [CGWindowID: CGRect] = [:],
+        displayFrames: [CGWindowID: CGRect] = [:],
         focusWindowID: CGWindowID? = nil,
         animated: Bool = false
     ) {
@@ -246,7 +250,8 @@ extension WindowManager {
                         from: wasStashed ? previousFrame : nil,
                         fromNatural: fromNatural,
                         to: entry.isStashed ? entry.frame : nil,
-                        toNatural: natural.origin
+                        toNatural: natural.origin,
+                        display: displayFrames[entry.id]
                     ),
                     // A resize sent at the start origin can run past the screen edge, and macOS caps the
                     // width there. The final carries the size too; AppDriver reads the live size and
@@ -316,17 +321,28 @@ extension WindowManager {
     }
 
     /// Pins a sliding window at the stash sliver of each stashed end while its strip position
-    /// lies beyond it. Top/bottom stashes (adjacent displays) leave the strip's row, so they get
-    /// no pin; the final mutation lands those windows at their sliver.
+    /// lies beyond it. A top/bottom stash (the side edge is shared with another display) leaves
+    /// the strip's row, so the window swaps to it while its strip position crosses `display`'s edge.
     private func slideParking(
         from parkedFrom: CGRect?,
         fromNatural: CGPoint,
         to parkedTo: CGRect?,
-        toNatural: CGPoint
+        toNatural: CGPoint,
+        display: CGRect?
     ) -> ScrollAnimator.Parking {
         var parking = ScrollAnimator.Parking()
         func pin(_ parked: CGRect?, natural: CGPoint) {
-            guard let parked, abs(parked.minY - natural.y) < 0.5 else { return }
+            guard let parked else { return }
+            guard abs(parked.minY - natural.y) < 0.5 else {
+                guard let display else { return }
+                let maxOriginX = display.maxX - parked.width
+                if natural.x < display.minX {
+                    parking.belowMinX = .init(stash: parked.origin, limitX: display.minX)
+                } else if natural.x > maxOriginX {
+                    parking.aboveMaxX = .init(stash: parked.origin, limitX: maxOriginX)
+                }
+                return
+            }
             if parked.minX < natural.x {
                 parking.maxX = parked.minX
             } else if parked.minX > natural.x {

@@ -172,7 +172,8 @@ public actor AppDriver {
             _ = mutation.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
 
             // An invalidated diff cache means the user may have resized the window; read its live size.
-            let currentKnownSize = mutation.needsFullFrame
+            // A slide can carry a window near another display, where macOS moves and shrinks it.
+            let currentKnownSize = mutation.needsFullFrame || mutation.isSlideFinal
                 ? mutation.element.size
                 : (lastAppliedSizes[winID] ?? mutation.element.size)
             let sizeChanged: Bool = {

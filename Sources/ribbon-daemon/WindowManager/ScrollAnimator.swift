@@ -8,6 +8,7 @@ import QuartzCore
 ///
 /// - Windows move along their strip (natural) positions and are pinned at their stash sliver
 ///   only while past it, so off-screen windows join and leave in step with their neighbors.
+///   Past a shared display edge they show at their top/bottom stash instead.
 /// - Frames come from the main display's CADisplayLink (up to 120Hz), kept alive and paused
 ///   between slides so the first frame is not delayed by link creation.
 /// - Each PID has at most one slide step in flight, so a slow app skips frames instead of
@@ -26,6 +27,16 @@ final class ScrollAnimator: @unchecked Sendable {
     struct Parking {
         var minX: CGFloat?
         var maxX: CGFloat?
+        /// Top/bottom stashes the window shows at while its strip position lies on the neighbor
+        /// display past a shared edge, where macOS would move and shrink it.
+        var belowMinX: EdgeSwap?
+        var aboveMaxX: EdgeSwap?
+    }
+
+    struct EdgeSwap {
+        let stash: CGPoint
+        /// The strip origin x past which the window would cross the shared edge.
+        let limitX: CGFloat
     }
 
     struct Slide {
@@ -418,9 +429,11 @@ final class ScrollAnimator: @unchecked Sendable {
         abs(shown(track, progress: 0, durationMs: 0).x - track.fromNatural.x.rounded()) > 1
     }
 
-    /// The strip position pinned at the window's stash slivers.
+    /// The strip position pinned at the window's stash slivers, or its top/bottom stash past a shared edge.
     private static func shown(_ track: Track, progress: Double, durationMs: Double) -> CGPoint {
         var p = natural(track, progress: progress, durationMs: durationMs)
+        if let swap = track.parking.belowMinX, p.x < swap.limitX { return swap.stash }
+        if let swap = track.parking.aboveMaxX, p.x > swap.limitX { return swap.stash }
         if let maxX = track.parking.maxX { p.x = min(p.x, maxX) }
         if let minX = track.parking.minX { p.x = max(p.x, minX) }
         return CGPoint(x: p.x.rounded(), y: p.y.rounded())
