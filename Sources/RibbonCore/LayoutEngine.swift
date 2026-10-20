@@ -35,6 +35,40 @@ public struct TilingPlan: Sendable {
     }
 }
 
+/// How far past the canvas edges the display edges shared with another display lie; nil where
+/// the edge is free. macOS moves a window half or more past a shared edge onto the other display
+/// and shrinks it to fit there.
+public struct SharedEdges: Sendable, Equatable {
+    public var left: Double?
+    public var right: Double?
+
+    public init(left: Double? = nil, right: Double? = nil) {
+        self.left = left
+        self.right = right
+    }
+
+    public init(screenFrame: QuartzRect, config: Config, targetDisplay: DisplayBounds?, allDisplays: [DisplayBounds]) {
+        guard let target = targetDisplay else {
+            self.init()
+            return
+        }
+        let free = FreeEdgeStashEngine.freeEdges(for: target.id, in: allDisplays)
+        let canvasX = floor(screenFrame.minX + config.edgeMargin)
+        let canvasRight = canvasX + floor(screenFrame.width - (config.edgeMargin * 2))
+        self.init(
+            left: free.contains(.left) ? nil : canvasX - target.frame.minX,
+            right: free.contains(.right) ? nil : target.frame.maxX - canvasRight
+        )
+    }
+
+    /// The side a column at `x` (relative to the canvas's left edge) lies half or more past.
+    func mostlyPast(x: Double, width: Double, canvasWidth: Double) -> StripWing? {
+        if let inset = left, -x - inset >= width / 2 { return .left }
+        if let inset = right, x + width - canvasWidth - inset >= width / 2 { return .right }
+        return nil
+    }
+}
+
 public struct LayoutEngine: Sendable {
     public init() {}
 
@@ -82,10 +116,14 @@ public struct LayoutEngine: Sendable {
         return result
     }
 
+    /// Scrolls just enough to show the active column, then further when a column would sit half or
+    /// more past a shared display edge, so that edge falls between columns. Past the strip's end
+    /// that leaves empty canvas.
     public static func minimalScrollOffset(
         for ribbon: Ribbon,
         canvasWidth: Double,
-        config: Config
+        config: Config,
+        sharedEdges: SharedEdges = SharedEdges()
     ) -> Double {
         if ribbon.isOverview {
             return 0.0
@@ -108,7 +146,20 @@ public struct LayoutEngine: Sendable {
 
         let last = geometry[geometry.count - 1]
         let totalStripWidth = last.x + last.width
-        return floor(max(0.0, min(offset, max(0.0, totalStripWidth - canvasWidth))))
+        offset = floor(max(0.0, min(offset, max(0.0, totalStripWidth - canvasWidth))))
+
+        for (i, col) in geometry.enumerated() where i != activeIdx {
+            switch sharedEdges.mostlyPast(x: col.x - offset, width: col.width, canvasWidth: canvasWidth) {
+            // Columns already fully off screen also count; max/min keep them from scrolling back.
+            case .left? where i + 1 < geometry.count:
+                offset = max(offset, geometry[i + 1].x)
+            case .right? where i > 0:
+                offset = min(offset, geometry[i - 1].x + geometry[i - 1].width - canvasWidth)
+            default:
+                continue
+            }
+        }
+        return offset
     }
 
     public static func computePlan(
@@ -141,6 +192,8 @@ public struct LayoutEngine: Sendable {
         let geometry = columnGeometry(for: ribbon, canvasWidth: canvasW, config: config)
         var placements: [WindowPlacement] = []
         let canvasRight = canvasX + canvasW
+        let sharedEdges = SharedEdges(screenFrame: screenFrame, config: config,
+                                      targetDisplay: targetDisplay, allDisplays: allDisplays)
 
         for (index, col) in ribbon.columns.enumerated() {
             let geo = geometry[index]
@@ -149,13 +202,16 @@ public struct LayoutEngine: Sendable {
 
             let leftEdge = colX
             let rightEdge = colX + colW
+            // Where the scroll cannot keep a shared edge between columns (both sides shared), a column
+            // half past it stashes, leaving empty canvas.
+            let pastShared = sharedEdges.mostlyPast(x: colX - canvasX, width: colW, canvasWidth: canvasW)
 
             let isStashed: Bool
             let wing: StripWing
-            if rightEdge <= canvasX {
+            if rightEdge <= canvasX || pastShared == .left {
                 isStashed = true
                 wing = .left
-            } else if leftEdge >= canvasRight {
+            } else if leftEdge >= canvasRight || pastShared == .right {
                 isStashed = true
                 wing = .right
             } else {

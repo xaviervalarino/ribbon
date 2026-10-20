@@ -261,6 +261,46 @@ func runTests() {
     TestRunner.assertEqual(slurpRibbon.columns.count, 1, "Slurp merges the right column")
     TestRunner.assertEqual(slurpRibbon.activeWindow?.id, 401, "Slurp keeps focus on the current window")
 
+    // 11. A column half past a shared display edge scrolls off; under half stays as a peek
+    func straddleRibbon(middleWidth: Double) -> Ribbon {
+        Ribbon(columns: [
+            ColumnModel(windows: [WindowModel(id: 501, pid: 1, title: "A", appName: "App1")], widthRatio: 0.5),
+            ColumnModel(windows: [WindowModel(id: 502, pid: 2, title: "B", appName: "App2")], widthRatio: middleWidth),
+            ColumnModel(windows: [WindowModel(id: 503, pid: 3, title: "C", appName: "App3")], widthRatio: 0.5)
+        ], activeColumnIndex: 1)
+    }
+    let d2Shared = SharedEdges(screenFrame: d2Quartz, config: config, targetDisplay: d2Bounds, allDisplays: displays)
+    TestRunner.assertEqual(d2Shared, SharedEdges(left: config.edgeMargin, right: nil), "D2 shares only its left edge")
+    let d2CanvasW = d2Quartz.width - (config.edgeMargin * 2)
+    var snapped = straddleRibbon(middleWidth: 0.8)
+    snapped.viewportOffset = LayoutEngine.minimalScrollOffset(for: snapped, canvasWidth: d2CanvasW, config: config, sharedEdges: d2Shared)
+    let snappedGeometry = LayoutEngine.columnGeometry(for: snapped, canvasWidth: d2CanvasW, config: config)
+    TestRunner.assertEqual(snapped.viewportOffset, snappedGeometry[1].x, "Active column moves flush to the shared edge")
+    let snappedPlan = LayoutEngine.computePlan(for: snapped, screenFrame: d2Quartz, config: config, targetDisplay: d2Bounds, allDisplays: displays)
+    TestRunner.assertTrue(snappedPlan.placements[0].isStashed, "Column past the shared edge stashes")
+    TestRunner.assertFalse(snappedPlan.placements[2].isStashed, "Next column peeks past the free edge")
+    var peek = straddleRibbon(middleWidth: 0.62)
+    let unsnapped = LayoutEngine.minimalScrollOffset(for: peek, canvasWidth: d2CanvasW, config: config)
+    peek.viewportOffset = LayoutEngine.minimalScrollOffset(for: peek, canvasWidth: d2CanvasW, config: config, sharedEdges: d2Shared)
+    TestRunner.assertEqual(peek.viewportOffset, unsnapped, "A column under half past the shared edge stays")
+    let peekPlan = LayoutEngine.computePlan(for: peek, screenFrame: d2Quartz, config: config, targetDisplay: d2Bounds, allDisplays: displays)
+    TestRunner.assertFalse(peekPlan.placements[0].isStashed, "Column under half past the shared edge stays tiled")
+    TestRunner.assertTrue(peekPlan.placements[0].quartzFrame.minX < d2Quartz.minX, "It overhangs the shared edge")
+
+    // D1 shares its right edge: scrolling left onto the wide column leaves the next one half past it.
+    let d1Shared = SharedEdges(screenFrame: d1Quartz, config: config, targetDisplay: d1Bounds, allDisplays: displays)
+    TestRunner.assertEqual(d1Shared, SharedEdges(left: nil, right: config.edgeMargin), "D1 shares only its right edge")
+    let d1CanvasW = d1Quartz.width - (config.edgeMargin * 2)
+    var snappedRight = straddleRibbon(middleWidth: 0.8)
+    snappedRight.viewportOffset = 10_000
+    snappedRight.viewportOffset = LayoutEngine.minimalScrollOffset(for: snappedRight, canvasWidth: d1CanvasW, config: config, sharedEdges: d1Shared)
+    let rightGeometry = LayoutEngine.columnGeometry(for: snappedRight, canvasWidth: d1CanvasW, config: config)
+    TestRunner.assertEqual(snappedRight.viewportOffset, rightGeometry[1].x + rightGeometry[1].width - d1CanvasW,
+                           "Active column moves flush to the shared right edge")
+    let rightPlan = LayoutEngine.computePlan(for: snappedRight, screenFrame: d1Quartz, config: config, targetDisplay: d1Bounds, allDisplays: displays)
+    TestRunner.assertTrue(rightPlan.placements[2].isStashed, "Column past the shared right edge stashes")
+    TestRunner.assertFalse(rightPlan.placements[0].isStashed, "Previous column peeks past the free left edge")
+
     guard TestRunner.summary() else {
         exit(1)
     }

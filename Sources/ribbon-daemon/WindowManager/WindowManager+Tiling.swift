@@ -110,7 +110,10 @@ extension WindowManager {
             let screenFullQuartzFrame = targetDisplay?.frame ?? QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight)
 
             let canvasW = screenQuartzFrame.width - (config.edgeMargin * 2)
-            r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config)
+            let sharedEdges = SharedEdges(screenFrame: screenQuartzFrame, config: config,
+                                          targetDisplay: targetDisplay, allDisplays: allDisplayBounds)
+            r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config,
+                                                                sharedEdges: sharedEdges)
             ribbons[sID] = r
 
             let plan = LayoutEngine.computePlan(
@@ -307,7 +310,7 @@ extension WindowManager {
 
     /// Pins a sliding window at the stash sliver of each stashed end while its strip position
     /// lies beyond it. A top/bottom stash (the side edge is shared with another display) leaves
-    /// the strip's row, so the window swaps to it while its strip position crosses `display`'s edge.
+    /// the strip's row, so the window swaps to it while its strip position lies half past `display`'s edge.
     private func slideParking(
         from parkedFrom: CGRect?,
         fromNatural: CGPoint,
@@ -319,12 +322,13 @@ extension WindowManager {
         func pin(_ parked: CGRect?, natural: CGPoint) {
             guard let parked else { return }
             guard abs(parked.minY - natural.y) < 0.5 else {
+                // Half past the edge is where macOS takes the window, matching the layout's rule.
                 guard let display else { return }
-                let maxOriginX = display.maxX - parked.width
+                let half = parked.width / 2
                 if natural.x < display.minX {
-                    parking.belowMinX = .init(stash: parked.origin, limitX: display.minX)
-                } else if natural.x > maxOriginX {
-                    parking.aboveMaxX = .init(stash: parked.origin, limitX: maxOriginX)
+                    parking.belowMinX = .init(stash: parked.origin, limitX: display.minX - half)
+                } else if natural.x > display.maxX - parked.width {
+                    parking.aboveMaxX = .init(stash: parked.origin, limitX: display.maxX - half)
                 }
                 return
             }
