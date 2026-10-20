@@ -143,7 +143,7 @@ The Ribbon 2.0 spec (agy session notes, not in repo) drove commits `6a37dd4`..`6
 
 - [x] Pure translations use one AX position write; the focus target is focused by its AppDriver after its move lands; `AXEnhancedUserInterface` stays off unless VoiceOver runs (`47587aa`).
 - [ ] Give `AppDriver` a serial executor (`DispatchSerialQueue`, as the spec describes) so blocked AX calls do not hold cooperative-pool threads.
-- [ ] Coalesce in `AppDriver`: an actor runs `drainQueue` to completion per message, so `isDraining` is never true and queued retiles against a hung app each pay a full drain. Stamp mutations with a retile generation and drop older ones.
+- [x] Coalesce in `AppDriver`: `drainQueue` yields after each mutation, so enqueues during a drain merge into it and a new slide's steps run between resizes, dropping pending slide finals they replace. In a fast slurp/barf run (0.15s apart) the strip no longer freezes at slide start (hold ≤16ms, was 52–57ms on 5 of 10 slides); only the app still mid-resize lags (76–78ms).
 - [ ] Move the applied-frame cache into the drivers, or report failures back: AX write results are discarded, so a timed-out write is cached as applied and never resent.
 - [ ] Remove main-thread AX reads (`syncFocusedWindowToRibbon`, `applicationActivated`, `reconcileWindows`, on-demand re-track, event-handler size/position reads): route through drivers or use `CGWindowListCopyWindowInfo`. Set the 250ms timeout on every window element when it is tracked.
 - [ ] Cache `AXEnhancedUserInterface` per PID instead of reading it every batch.

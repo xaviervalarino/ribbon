@@ -262,7 +262,8 @@ extension WindowManager {
                         element: elem,
                         windowID: entry.id,
                         frame: entry.frame,
-                        needsFullFrame: needsFullFrame
+                        needsFullFrame: needsFullFrame,
+                        isSlideFinal: true
                     )
                 )
                 // One start mutation per window: AppDriver merges pending mutations for a window,

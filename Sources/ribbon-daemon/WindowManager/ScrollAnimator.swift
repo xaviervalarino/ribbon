@@ -13,7 +13,8 @@ import QuartzCore
 /// - Each PID has at most one slide step in flight, so a slow app skips frames instead of
 ///   queueing them, and its final mutation waits for that step so a stale step never lands last.
 /// - A fresh slide sends its first step immediately and holds the clock until every app has
-///   landed it (capped), so slow apps (Electron) start with the rest of the strip.
+///   landed it (capped), so slow apps (Electron) start with the rest of the strip. Apps still
+///   applying the previous slide's resizes are not waited on.
 /// - A retarget keeps each window's current velocity and eases it onto the new target, so
 ///   rapid presses read as one continuous glide instead of a stop and restart per press.
 /// - Each app is sent the position it should show when its step lands (its measured step
@@ -88,6 +89,9 @@ final class ScrollAnimator: @unchecked Sendable {
     private var landingWatches: [CGWindowID: LandingWatch] = [:]
     private var settledFocus: (pid: pid_t, mutation: AppDriver.WindowMutation)?
     private var pendingFinals: [pid_t: [AppDriver.WindowMutation]] = [:]
+    /// Final batches each app's driver is still applying; their resizes block the app's steps.
+    private var finalsDraining: [pid_t: Int] = [:]
+    private var sentWhileDraining: Set<pid_t> = []
     private var framesThisSlide = 0
     private var holdMsThisSlide = 0.0
     private var lastTickMs: Double?
@@ -220,7 +224,9 @@ final class ScrollAnimator: @unchecked Sendable {
         lastTickMs = now
 
         if let holdStart = holdStartMs {
-            guard inFlight.isEmpty || now - holdStart >= Self.maxStartHoldMs else { return }
+            // Apps still applying the last slide's resizes cannot land a step soon; the strip starts without them.
+            let landed = inFlight.allSatisfy { finalsDraining[$0] != nil }
+            guard landed || now - holdStart >= Self.maxStartHoldMs else { return }
             // Resume the clock from the first step's progress, as if it had just been shown.
             holdStartMs = nil
             holdMsThisSlide = now - holdStart
@@ -247,7 +253,8 @@ final class ScrollAnimator: @unchecked Sendable {
                    hypot(origin.x - watch.startOrigin.x, origin.y - watch.startOrigin.y) > 1 {
                     landingWatches[id]?.sentMs = nowMs
                 }
-                return AppDriver.SlideStep(element: track.element, origin: origin, size: Self.size(track, progress: p))
+                return AppDriver.SlideStep(element: track.element, windowID: id, origin: origin,
+                                           size: Self.size(track, progress: p))
             }
             send(steps, to: pid)
         }
@@ -318,16 +325,30 @@ final class ScrollAnimator: @unchecked Sendable {
             if inFlight.contains(pid) {
                 pendingFinals[pid, default: []].append(contentsOf: finals)
             } else {
-                let driver = driverFor(pid)
-                Task { await driver.enqueue(finals) }
+                enqueueFinals(finals, pid: pid)
             }
         }
         onIdle?()
     }
 
+    /// Marks the app busy until its driver drains, so a slide starting meanwhile does not wait on it.
+    private func enqueueFinals(_ finals: [AppDriver.WindowMutation], pid: pid_t) {
+        finalsDraining[pid, default: 0] += 1
+        let driver = driverFor(pid)
+        Task { [weak self] in
+            await driver.enqueue(finals)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.finalsDraining[pid, default: 1] -= 1
+                if self.finalsDraining[pid] == 0 { self.finalsDraining.removeValue(forKey: pid) }
+            }
+        }
+    }
+
     private func send(_ steps: [AppDriver.SlideStep], to pid: pid_t) {
         inFlight.insert(pid)
         sentAtMs[pid] = Self.nowMs()
+        if finalsDraining[pid] != nil { sentWhileDraining.insert(pid) }
         let driver = driverFor(pid)
         Task { [weak self] in
             await driver.slide(steps)
@@ -337,16 +358,20 @@ final class ScrollAnimator: @unchecked Sendable {
 
     private func stepLanded(pid: pid_t) {
         inFlight.remove(pid)
+        let queuedBehindFinals = sentWhileDraining.remove(pid) != nil
         if let sent = sentAtMs.removeValue(forKey: pid) {
             let roundTrip = Self.nowMs() - sent
             if roundTrip > 40 {
-                RibbonLog.log("slow step pid=\(pid) blocked \(Int(roundTrip))ms", category: "slide")
+                RibbonLog.log("slow step pid=\(pid) blocked \(Int(roundTrip))ms\(queuedBehindFinals ? " behind finals" : "")",
+                              category: "slide")
             }
-            stepLatencyMs[pid] = stepLatencyMs[pid].map { $0 * 0.7 + roundTrip * 0.3 } ?? roundTrip
+            // A step queued behind a resize measures the resize, not the app's step latency.
+            if !queuedBehindFinals {
+                stepLatencyMs[pid] = stepLatencyMs[pid].map { $0 * 0.7 + roundTrip * 0.3 } ?? roundTrip
+            }
         }
         guard let finals = pendingFinals.removeValue(forKey: pid), !finals.isEmpty else { return }
-        let driver = driverFor(pid)
-        Task { await driver.enqueue(finals) }
+        enqueueFinals(finals, pid: pid)
     }
 
     /// While holding, progress stays at the first step so retargets and lookups agree with it.
