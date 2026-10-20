@@ -184,6 +184,12 @@ extension WindowManager: AXEventObserverDelegate {
         if pendingFocusEchoes[id] != nil || pendingFocusEchoPIDs[pid] != nil {
             return
         }
+        // A click newer than the last command focus wins: drivers skip that focus, even one held through a slide.
+        // An event older than it (a slow front-window lookup, a click before the keypress) is stale.
+        guard AppDriver.focusRequested(id, at: now) else {
+            RibbonLog.log("focus event wid=\(id) pid=\(pid) ignored: older than the latest focus request", category: "focus")
+            return
+        }
 
         // A real (user-initiated) focus usually precedes a manual drag; the
         // diff cache can't see drags yet (kAXMoved lands in Phase 4), so

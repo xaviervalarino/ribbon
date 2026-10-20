@@ -155,6 +155,9 @@ The Ribbon 2.0 spec (agy session notes, not in repo) drove commits `6a37dd4`..`6
 - [ ] Experiment: trackpad follow (spec §4.1 reworked) with throttled AX position writes, one per frame per visible window, from a `CGEventTap` on continuous scroll events.
 - [x] Resize timing A/B (2026-10-17; 3 slurps and 3 barfs per round, 0.4s apart; `slow step` lines in the daemon log). `instant` stalls the resizing app's slide 42–124ms at slide-ms 100 and 44–65ms at 55; `end` stalls 0; `grow-first` stalls only on barf (40–60ms). The stall is the app's resize time, so slide length does not shorten it. Defaults are now `resize-mode end` and `slide-ms 55`. Trade-off: on barf, `end` shows the desktop beside growing windows until the slide lands.
 - [ ] Open: long slides may favor `grow-first`, since `end` shows the desktop for the whole slide while a 40–60ms stall shrinks as a share of it. The threshold is unmeasured; rerun the A/B at slide-ms 150, 200 and 300 before tying resize timing to slide length or adding a config option.
+- [ ] Animate click scrolls: a click on a partly visible column scrolls the strip without a slide (focus events call `scheduleRetile`, which is not animated). A click during a slide waits for it to end; retarget the running slide toward the clicked column instead.
+- [ ] Mouse follows focus: warp the cursor to the window a command focuses, at the point its driver activates it, so a skipped focus warps nothing.
+- [ ] Multi-display check (review 2026-10-20, inferred): with a display touching the left or right edge, windows stash to top/bottom; `slideParking` pins only stashes on the strip's row, so those windows slide along the strip's x onto the neighboring display, and a joining window's first step teleports.
 - [ ] Experiment: SLS notify pump (spec PR 5). Confirm event 1401 maps 1:1 to a manual Space switch before relying on it; `NSWorkspace.activeSpaceDidChangeNotification` stays the source of truth until then.
 
 ---

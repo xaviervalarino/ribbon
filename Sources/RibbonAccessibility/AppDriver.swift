@@ -51,10 +51,17 @@ public actor AppDriver {
 
     /// The window the latest focus request targets. Each app's driver focuses on its own
     /// schedule, so a driver skips a focus that a newer request has replaced.
-    private static let latestFocus = OSAllocatedUnfairLock<CGWindowID?>(initialState: nil)
+    private static let latestFocus = OSAllocatedUnfairLock<(id: CGWindowID, at: DispatchTime)?>(initialState: nil)
 
-    public static func focusRequested(_ windowID: CGWindowID) {
-        latestFocus.withLock { $0 = windowID }
+    /// Records a focus request made at `at`; returns false, changing nothing, when a newer one exists.
+    /// Focus events arrive late (replayed after a slide, or answered by a lookup), so order goes by `at`.
+    @discardableResult
+    public static func focusRequested(_ windowID: CGWindowID, at: DispatchTime = .now()) -> Bool {
+        latestFocus.withLock { latest in
+            if let latest, latest.at > at { return false }
+            latest = (windowID, at)
+            return true
+        }
     }
 
     public struct SlideStep: Sendable {
@@ -200,7 +207,7 @@ public actor AppDriver {
         }
 
         if let target = focusTarget {
-            if Self.latestFocus.withLock({ $0 == nil || $0 == target.windowID }) {
+            if Self.latestFocus.withLock({ $0 == nil || $0?.id == target.windowID }) {
                 _ = target.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
                 NSRunningApplication(processIdentifier: pid)?.activate()
                 target.element.focus()
