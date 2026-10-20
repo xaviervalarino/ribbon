@@ -101,7 +101,7 @@ Other confirmed defects (full review in git history / session notes): destroy no
 
 ### Phase 3: Layout, stash, scroll (blocker 4 lives here) — done 2026-09-14
 - [x] Corner-stash placement: `StashCorner` config (default bottomRight); top corners hide horizontally only (WindowServer clamps title bars at screen top); pre-adoption frames persisted to `~/.config/ribbon/restore-frames.json`, restored on clean quit; crash recovery loads the leftover file on next start so true originals survive; minimize/hide keep the original (only dead windows forget it).
-- [x] Clamp/stash partially-offscreen columns — columns crossing an edge with an adjacent display get stashed instead of bleeding (`allowLeft/RightBleed` from NSScreen adjacency).
+- [x] Clamp/stash partially-offscreen columns — columns crossing an edge with an adjacent display get stashed instead of bleeding. *(The `allowLeft/RightBleed` flags were never read; replaced by the shared-edge snap, 5acbb5d.)*
 - [x] Minimal-scroll viewport: `Ribbon.viewportOffset` + `LayoutEngine.minimalScrollOffset` (clamped to `[0, stripW − canvasW]`); layout derives all x from it.
 - [x] Diff tiling — `lastAppliedFrames` cache skips unchanged writes (<0.5pt) and untouched apps skip the AXEnhancedUserInterface dance; 25ms trailing-coalesce `scheduleRetile()`. Manual-drag staleness mitigated by evicting the cache entry on real focus events; proper fix is Phase 4's `kAXMoved` observation.
 - [x] Echo ledger (focus intents, 150ms deadline) consumes our own activate/raise echoes; `retile()` no longer focuses anything — commands focus via `focusActiveWindow()` only when the active window changed.
@@ -157,7 +157,7 @@ The Ribbon 2.0 spec (agy session notes, not in repo) drove commits `6a37dd4`..`6
 - [ ] Open: long slides may favor `grow-first`, since `end` shows the desktop for the whole slide while a 40–60ms stall shrinks as a share of it. The threshold is unmeasured; rerun the A/B at slide-ms 150, 200 and 300 before tying resize timing to slide length or adding a config option.
 - [ ] Animate click scrolls: a click on a partly visible column scrolls the strip without a slide (focus events call `scheduleRetile`, which is not animated). A click during a slide waits for it to end; retarget the running slide toward the clicked column instead.
 - [ ] Mouse follows focus: warp the cursor to the window a command focuses, at the point its driver activates it, so a skipped focus warps nothing.
-- [ ] Multi-display check (review 2026-10-20, inferred): with a display touching the left or right edge, windows stash to top/bottom; `slideParking` pins only stashes on the strip's row, so those windows slide along the strip's x onto the neighboring display, and a joining window's first step teleports.
+- [x] Shared display edges: macOS moves a window half or more past an edge shared with another display onto that display and shrinks it (measured 2026-10-20: 24% past stays, 60% vanishes, 76% moved to the laptop at 949pt). The scroll snaps so a shared edge falls between columns, slides swap to the top/bottom stash at half, and slide finals re-read the live size. *(e13c831, 5acbb5d.)*
 - [ ] Experiment: SLS notify pump (spec PR 5). Confirm event 1401 maps 1:1 to a manual Space switch before relying on it; `NSWorkspace.activeSpaceDidChangeNotification` stays the source of truth until then.
 
 ---
