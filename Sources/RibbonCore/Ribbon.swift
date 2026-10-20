@@ -135,14 +135,14 @@ public struct Ribbon: Sendable, Codable {
     }
 
     public mutating func slurp() {
-        // Pull first window from right column into current column
+        // Pull first window from right column into current column. Focus stays on the current
+        // window: focusing the pulled window would activate its app, which blocks AX while it redraws.
         guard activeColumnIndex < columns.count - 1 else { return }
         let rightIndex = activeColumnIndex + 1
         var rightCol = columns[rightIndex]
         guard !rightCol.windows.isEmpty else { return }
         let win = rightCol.windows.removeFirst()
         columns[activeColumnIndex].windows.append(win)
-        columns[activeColumnIndex].activeRowIndex = columns[activeColumnIndex].windows.count - 1
 
         if rightCol.windows.isEmpty {
             columns.remove(at: rightIndex)

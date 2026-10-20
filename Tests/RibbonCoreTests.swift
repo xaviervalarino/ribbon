@@ -252,6 +252,15 @@ func runTests() {
     TestRunner.assertEqual(LayoutEngine.rowHeights(minimums: [30, 30, 30], usable: 900), [300, 300, 300], "Rows split evenly without minimums")
     TestRunner.assertEqual(LayoutEngine.rowHeights(minimums: [500, 500], usable: 900), [500, 500], "Minimums that do not fit overflow")
 
+    // 10. Slurp keeps focus on the current window
+    var slurpRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 401, pid: 1, title: "Current", appName: "App1")]),
+        ColumnModel(windows: [WindowModel(id: 402, pid: 2, title: "Pulled", appName: "App2")])
+    ])
+    slurpRibbon.slurp()
+    TestRunner.assertEqual(slurpRibbon.columns.count, 1, "Slurp merges the right column")
+    TestRunner.assertEqual(slurpRibbon.activeWindow?.id, 401, "Slurp keeps focus on the current window")
+
     guard TestRunner.summary() else {
         exit(1)
     }
