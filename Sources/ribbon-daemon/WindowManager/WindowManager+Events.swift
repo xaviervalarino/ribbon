@@ -313,6 +313,7 @@ extension WindowManager: AXEventObserverDelegate {
             trackedWindows.removeValue(forKey: id)
             lastAppliedFrames.removeValue(forKey: id)
             lastStashedState.removeValue(forKey: id)
+            lastNaturalFrames.removeValue(forKey: id)
             originalFrames.removeValue(forKey: id)
             displayByWindowID.removeValue(forKey: id)
             spaceByWindowID.removeValue(forKey: id)

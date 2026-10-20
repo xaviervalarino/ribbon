@@ -241,6 +241,7 @@ extension WindowManager {
         displayByWindowID.removeValue(forKey: id)
         lastAppliedFrames.removeValue(forKey: id)
         lastStashedState.removeValue(forKey: id)
+        lastNaturalFrames.removeValue(forKey: id)
         adoptedSinceLastSweep.remove(id)
 
         for sID in ribbons.keys {
@@ -305,6 +306,7 @@ extension WindowManager {
         }
         lastAppliedFrames.removeValue(forKey: id)
         lastStashedState.removeValue(forKey: id)
+        lastNaturalFrames.removeValue(forKey: id)
         displayByWindowID.removeValue(forKey: id)
         if let sID = spaceByWindowID.removeValue(forKey: id) {
             ribbons[sID]?.removeWindow(id: id)
