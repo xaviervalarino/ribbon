@@ -17,6 +17,7 @@ extension WindowManager {
               let pid = ribbons.values.lazy
                 .flatMap({ $0.columns.flatMap(\.windows) })
                 .first(where: { $0.id == id })?.pid else { return }
+        AppDriver.focusRequested(id)
         expectFocusEcho(id: id, pid: pid, ms: 150)
         NSRunningApplication(processIdentifier: pid)?.activate()
         elem.focus()
@@ -177,6 +178,7 @@ extension WindowManager {
             activeSpaceID = targetSID
             displayBySpaceID[targetSID] = targetDID
             if let win = ribbons[targetSID]?.activeWindow, let elem = trackedWindows[win.id] {
+                AppDriver.focusRequested(win.id)
                 expectFocusEcho(id: win.id, pid: win.pid, ms: 150)
                 NSRunningApplication(processIdentifier: win.pid)?.activate()
                 elem.focus()

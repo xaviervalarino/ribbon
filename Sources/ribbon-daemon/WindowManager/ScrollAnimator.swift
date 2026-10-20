@@ -141,8 +141,9 @@ final class ScrollAnimator: @unchecked Sendable {
             }
             tracks[id] = track
         }
+        // The new slide carries its own finals; a held focus waiting on the old one still applies.
         for pid in pendingFinals.keys {
-            pendingFinals[pid]?.removeAll { slides[$0.windowID] != nil }
+            pendingFinals[pid] = pendingFinals[pid]?.compactMap { slides[$0.windowID] == nil ? $0 : $0.focusOnly }
         }
 
         let longest = tracks.values.map {

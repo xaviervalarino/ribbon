@@ -115,6 +115,11 @@ extension WindowManager: AXEventObserverDelegate {
             let ratio = max(0.15, min(1.0, Double(newSize.width) / Double(canvasW)))
             if var r = self.ribbons[sID] {
                 if r.setWidthRatio(ratio, forWindowID: id) {
+                    let applied = self.lastAppliedFrames[id].map { "\(Int($0.width))" } ?? "none"
+                    RibbonLog.log(
+                        "manual resize wid=\(id) width=\(Int(newSize.width)) applied=\(applied) ratio=\(String(format: "%.3f", ratio))",
+                        category: "layout"
+                    )
                     self.ribbons[sID] = r
                     self.lastAppliedFrames.removeValue(forKey: id)
                     self.scheduleRetile()

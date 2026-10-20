@@ -2,6 +2,7 @@ import Foundation
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import os
 
 /// Serial background actor dedicated to a single application process (pid).
 ///
@@ -39,6 +40,21 @@ public actor AppDriver {
             self.shouldFocus = shouldFocus
             self.isSlideFinal = isSlideFinal
         }
+
+        /// Keeps only the focus, for when a newer mutation replaces this one's frame.
+        public var focusOnly: WindowMutation? {
+            guard shouldFocus else { return nil }
+            return WindowMutation(element: element, windowID: windowID, frame: frame,
+                                  needsFullFrame: false, needsMove: false, shouldFocus: true)
+        }
+    }
+
+    /// The window the latest focus request targets. Each app's driver focuses on its own
+    /// schedule, so a driver skips a focus that a newer request has replaced.
+    private static let latestFocus = OSAllocatedUnfairLock<CGWindowID?>(initialState: nil)
+
+    public static func focusRequested(_ windowID: CGWindowID) {
+        latestFocus.withLock { $0 = windowID }
     }
 
     public struct SlideStep: Sendable {
@@ -58,10 +74,7 @@ public actor AppDriver {
         for step in steps {
             // A resize the window has not started yet would stall this slide; the slide's own final resizes it.
             if let pending = pendingMutations[step.windowID], pending.isSlideFinal {
-                pendingMutations[step.windowID] = pending.shouldFocus
-                    ? WindowMutation(element: pending.element, windowID: pending.windowID, frame: pending.frame,
-                                     needsFullFrame: false, needsMove: false, shouldFocus: true)
-                    : nil
+                pendingMutations[step.windowID] = pending.focusOnly
             }
             _ = step.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
             step.element.position = step.origin
@@ -187,9 +200,13 @@ public actor AppDriver {
         }
 
         if let target = focusTarget {
-            _ = target.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
-            NSRunningApplication(processIdentifier: pid)?.activate()
-            target.element.focus()
+            if Self.latestFocus.withLock({ $0 == nil || $0 == target.windowID }) {
+                _ = target.element.setMessagingTimeout(Self.defaultTimeoutSeconds)
+                NSRunningApplication(processIdentifier: pid)?.activate()
+                target.element.focus()
+            } else {
+                RibbonLog.log("focus skipped wid=\(target.windowID) pid=\(pid): a newer focus replaced it", category: "focus")
+            }
         }
 
         if wasEnhanced && NSWorkspace.shared.isVoiceOverEnabled {

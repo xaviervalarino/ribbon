@@ -186,6 +186,7 @@ extension WindowManager {
             let isFocusTarget = entry.id == focusWindowID
             if isFocusTarget {
                 focusEnqueued = true
+                AppDriver.focusRequested(entry.id)
                 // Focus lands after the driver's AX writes, so the echo window covers their latency.
                 expectFocusEcho(id: entry.id, pid: entry.pid, ms: 300)
             }
