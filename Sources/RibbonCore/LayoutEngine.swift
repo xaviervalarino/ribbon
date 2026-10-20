@@ -114,17 +114,9 @@ public struct LayoutEngine: Sendable {
     public static func computePlan(
         for ribbon: Ribbon,
         screenFrame: CGRect,
-        config: Config,
-        allowLeftBleed: Bool = true,
-        allowRightBleed: Bool = true
+        config: Config
     ) -> TilingPlan {
-        return computePlan(
-            for: ribbon,
-            screenFrame: QuartzRect(screenFrame),
-            config: config,
-            allowLeftBleed: allowLeftBleed,
-            allowRightBleed: allowRightBleed
-        )
+        return computePlan(for: ribbon, screenFrame: QuartzRect(screenFrame), config: config)
     }
 
     /// Computes the tiling geometry and stashed window placements for a ribbon in Quartz space.
@@ -132,16 +124,12 @@ public struct LayoutEngine: Sendable {
     ///   - ribbon: The ribbon being tiled.
     ///   - screenFrame: The display's visible bounding rectangle in top-left Quartz coordinates.
     ///   - config: Layout configuration (margins, inner gaps, sliver sizing).
-    ///   - allowLeftBleed: True if stashed windows may park past the left edge (when no monitor is to the left).
-    ///   - allowRightBleed: True if stashed windows may park past the right edge (when no monitor is to the right).
     public static func computePlan(
         for ribbon: Ribbon,
         screenFrame: QuartzRect,
         config: Config,
         targetDisplay: DisplayBounds? = nil,
-        allDisplays: [DisplayBounds] = [],
-        allowLeftBleed: Bool = true,
-        allowRightBleed: Bool = true
+        allDisplays: [DisplayBounds] = []
     ) -> TilingPlan {
         guard !ribbon.columns.isEmpty else { return TilingPlan() }
 

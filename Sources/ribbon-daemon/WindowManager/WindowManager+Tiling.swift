@@ -109,19 +109,6 @@ extension WindowManager {
             let screenQuartzFrame = targetDisplay?.visibleFrame ?? QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryScreenHeight)
             let screenFullQuartzFrame = targetDisplay?.frame ?? QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight)
 
-            // Prevent stashed windows from bleeding onto adjacent physical monitors.
-            var leftAdjacent = false
-            var rightAdjacent = false
-            for neighborScreen in NSScreen.screens where neighborScreen != screen {
-                let neighborBounds = QuartzGeometry.toQuartzRect(cocoaFrame: neighborScreen.frame, primaryScreenHeight: primaryScreenHeight)
-                if QuartzGeometry.isAdjacentLeft(rect: screenFullQuartzFrame, candidate: neighborBounds) {
-                    leftAdjacent = true
-                }
-                if QuartzGeometry.isAdjacentRight(rect: screenFullQuartzFrame, candidate: neighborBounds) {
-                    rightAdjacent = true
-                }
-            }
-
             let canvasW = screenQuartzFrame.width - (config.edgeMargin * 2)
             r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config)
             ribbons[sID] = r
@@ -131,9 +118,7 @@ extension WindowManager {
                 screenFrame: screenQuartzFrame,
                 config: config,
                 targetDisplay: targetDisplay,
-                allDisplays: allDisplayBounds,
-                allowLeftBleed: !leftAdjacent,
-                allowRightBleed: !rightAdjacent
+                allDisplays: allDisplayBounds
             )
 
             var windowPID: [CGWindowID: pid_t] = [:]
