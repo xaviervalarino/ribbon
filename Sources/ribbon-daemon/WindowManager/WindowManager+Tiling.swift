@@ -55,6 +55,20 @@ extension WindowManager {
         retile(allSpaces: allSpaces, focusWindowID: focusWindowID, animated: animated)
     }
 
+    /// Drops cached placement for a window whose AX write failed and schedules a retile retry.
+    func writeFailed(id: CGWindowID) {
+        lastAppliedFrames.removeValue(forKey: id)
+        lastStashedState.removeValue(forKey: id)
+
+        let now = DispatchTime.now()
+        if let deadline = writeRetryDeadlines[id], now < deadline {
+            return
+        }
+        writeRetryDeadlines[id] = now + .milliseconds(500)
+        RibbonLog.log("write failed retry wid=\(id)", category: "layout")
+        scheduleRetile()
+    }
+
     // MARK: - Layout & Retile
 
     /// Recomputes and applies layouts. `focusWindowID` is focused by its AppDriver

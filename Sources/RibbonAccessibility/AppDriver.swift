@@ -107,10 +107,16 @@ public actor AppDriver {
     private var isDraining: Bool = false
     /// Called with a window's live height when it stays taller than a resize asked for.
     private let onMinHeight: ((CGWindowID, Double) -> Void)?
+    private let onWriteFailed: ((CGWindowID, AXError) -> Void)?
 
-    public init(pid: pid_t, onMinHeight: ((CGWindowID, Double) -> Void)? = nil) {
+    public init(
+        pid: pid_t,
+        onMinHeight: ((CGWindowID, Double) -> Void)? = nil,
+        onWriteFailed: ((CGWindowID, AXError) -> Void)? = nil
+    ) {
         self.pid = pid
         self.onMinHeight = onMinHeight
+        self.onWriteFailed = onWriteFailed
     }
 
     /// Enqueues window mutations for this application process.
@@ -182,26 +188,40 @@ public actor AppDriver {
                        abs(cur.height - mutation.frame.size.height) >= 1.5
             }()
 
+            let writeError: AXError
             if sizeChanged {
                 // Window size genuinely changed: AX resize required so target app reflows views.
-                mutation.element.setFrame(mutation.frame)
-                RibbonLog.log(
-                    "AX frame applied wid=\(winID) pid=\(pid) target=\(mutation.frame.integral)",
-                    category: "layout"
-                )
-                // Apps hold windows at their minimum height; the layout makes room once it knows it.
-                if let live = mutation.element.size, live.height >= mutation.frame.height + 2 {
-                    onMinHeight?(winID, live.height)
+                writeError = mutation.element.setFrame(mutation.frame)
+                if writeError == .success {
+                    RibbonLog.log(
+                        "AX frame applied wid=\(winID) pid=\(pid) target=\(mutation.frame.integral)",
+                        category: "layout"
+                    )
+                    // Apps hold windows at their minimum height; the layout makes room once it knows it.
+                    if let live = mutation.element.size, live.height >= mutation.frame.height + 2 {
+                        onMinHeight?(winID, live.height)
+                    }
                 }
             } else {
                 // Pure translation: single AX position write with zero resize roundtrips.
-                mutation.element.position = mutation.frame.origin
+                writeError = mutation.element.setPosition(mutation.frame.origin)
+                if writeError == .success {
+                    RibbonLog.log(
+                        "AX position applied wid=\(winID) pid=\(pid) target=\(mutation.frame.origin)",
+                        category: "layout"
+                    )
+                }
+            }
+
+            if writeError == .success {
+                lastAppliedSizes[winID] = mutation.frame.size
+            } else {
                 RibbonLog.log(
-                    "AX position applied wid=\(winID) pid=\(pid) target=\(mutation.frame.origin)",
+                    "AX write failed wid=\(winID) pid=\(pid) err=\(writeError.rawValue)",
                     category: "layout"
                 )
+                onWriteFailed?(winID, writeError)
             }
-            lastAppliedSizes[winID] = mutation.frame.size
             // Each resize blocks this app for tens of ms; yielding lets a new slide's steps run
             // between them and drop finals it replaces.
             await Task.yield()
