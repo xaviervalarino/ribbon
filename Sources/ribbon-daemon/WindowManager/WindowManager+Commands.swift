@@ -98,7 +98,14 @@ extension WindowManager {
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let name = app.localizedName ?? "?"
             if let filter = appFilter, !name.lowercased().contains(filter.lowercased()) { continue }
-            for win in AXElement.application(pid: app.processIdentifier).windows {
+            let appElem = AXElement.application(pid: app.processIdentifier)
+            var windows = appElem.windows.map { (win: $0, listed: true) }
+            // A popup can be missing from AXWindows yet reach the ribbon as the focused window.
+            if let focused = appElem.focusedWindow,
+               !windows.contains(where: { $0.win.windowID == focused.windowID }) {
+                windows.append((win: focused, listed: false))
+            }
+            for (win, listed) in windows {
                 let id = win.windowID
                 let frame = win.frame.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "?"
                 let present = buttons.filter { win.hasValue($0.1) }.map(\.0).joined(separator: ",")
@@ -108,6 +115,7 @@ extension WindowManager {
                     + " sizeSettable=\(win.isSettable(kAXSizeAttribute)) modal=\(win.bool(kAXModalAttribute) ?? false)"
                     + " buttons=\(present.isEmpty ? "none" : present)"
                     + " admitted=\(admits(win)) inRibbon=\(id.map { spaceByWindowID[$0] != nil } ?? false)"
+                    + (listed ? "" : " (focused, not in AXWindows)")
                 )
             }
         }
