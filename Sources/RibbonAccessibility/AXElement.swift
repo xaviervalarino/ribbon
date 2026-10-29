@@ -90,7 +90,7 @@ public final class AXElement: @unchecked Sendable {
         }
         set {
             guard let newPoint = newValue else { return }
-            _ = setPosition(newPoint)
+            setPosition(newPoint)
         }
     }
 
@@ -114,7 +114,7 @@ public final class AXElement: @unchecked Sendable {
         }
         set {
             guard let newSize = newValue else { return }
-            _ = setSize(newSize)
+            setSize(newSize)
         }
     }
 
@@ -136,10 +136,11 @@ public final class AXElement: @unchecked Sendable {
         // and clamps origin if current size exceeds destination boundaries.
         // Apply position first so expanding windows can grow, size to update dimensions,
         // then position again so shrinking windows placed near screen edges clear clamps.
-        // Every write runs even after a failure, since a later one can still land; the first
-        // failure is reported.
-        let errors = [setPosition(rect.origin), setSize(rect.size), setPosition(rect.origin)]
-        return errors.first { $0 != .success } ?? .success
+        // The final position write decides where the window ends up, so its result is the one
+        // reported; a size the window refuses (a fixed-size window) is no failure a retry fixes.
+        setPosition(rect.origin)
+        setSize(rect.size)
+        return setPosition(rect.origin)
     }
 
     public var isHidden: Bool {

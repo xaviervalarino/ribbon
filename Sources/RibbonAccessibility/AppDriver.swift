@@ -107,12 +107,12 @@ public actor AppDriver {
     private var isDraining: Bool = false
     /// Called with a window's live height when it stays taller than a resize asked for.
     private let onMinHeight: ((CGWindowID, Double) -> Void)?
-    private let onWriteFailed: ((CGWindowID, AXError) -> Void)?
+    private let onWriteFailed: ((CGWindowID, CGRect, AXError) -> Void)?
 
     public init(
         pid: pid_t,
         onMinHeight: ((CGWindowID, Double) -> Void)? = nil,
-        onWriteFailed: ((CGWindowID, AXError) -> Void)? = nil
+        onWriteFailed: ((CGWindowID, CGRect, AXError) -> Void)? = nil
     ) {
         self.pid = pid
         self.onMinHeight = onMinHeight
@@ -220,7 +220,7 @@ public actor AppDriver {
                     "AX write failed wid=\(winID) pid=\(pid) err=\(writeError.rawValue)",
                     category: "layout"
                 )
-                onWriteFailed?(winID, writeError)
+                onWriteFailed?(winID, mutation.frame, writeError)
             }
             // Each resize blocks this app for tens of ms; yielding lets a new slide's steps run
             // between them and drop finals it replaces.

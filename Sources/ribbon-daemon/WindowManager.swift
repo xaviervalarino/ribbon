@@ -110,7 +110,7 @@ public final class WindowManager {
     /// window, so any focus change from these apps before the deadline is an echo.
     var pendingFocusEchoPIDs: [pid_t: DispatchTime] = [:]
     var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
-    var writeRetryDeadlines: [CGWindowID: DispatchTime] = [:]
+    var writeRetries: [CGWindowID: (count: Int, last: DispatchTime)] = [:]
     var originalFrames: [CGWindowID: CGRect] = [:]
     var isStopped = false
     var appDrivers: [pid_t: AppDriver] = [:]
@@ -125,8 +125,8 @@ public final class WindowManager {
             onMinHeight: { [weak self] id, height in
                 DispatchQueue.main.async { self?.recordMinHeight(height, forWindowID: id) }
             },
-            onWriteFailed: { [weak self] id, _ in
-                DispatchQueue.main.async { self?.writeFailed(id: id) }
+            onWriteFailed: { [weak self] id, frame, error in
+                DispatchQueue.main.async { self?.writeFailed(id: id, frame: frame, error: error) }
             }
         )
         appDrivers[pid] = driver
