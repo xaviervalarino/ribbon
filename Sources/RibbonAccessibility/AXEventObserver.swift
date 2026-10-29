@@ -5,6 +5,9 @@ import ApplicationServices
 public enum AppEventKind {
     case hidden
     case unhidden
+    /// Observation started late (the app's AX was not ready at launch), so windows it created
+    /// before then sent no notification.
+    case observedLate
     case spaceChanged
 }
 
@@ -28,8 +31,10 @@ public final class AXEventObserver {
     private var observers: [pid_t: AXObserver] = [:]
     private var pendingWindowRegistrations: [pid_t: [AXElement]] = [:]
     private var pendingRetryPids: Set<pid_t> = []
+    /// Apps whose observation failed at least once; windows they create before it succeeds send nothing.
+    private var failedObservePids: Set<pid_t> = []
     private var isRunning: Bool = false
-    private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0]
+    private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0, 4.0]
     /// Returns true while main-thread handlers must wait (a scroll slide is running): their AX
     /// reads block on busy apps and would freeze the slide's frames.
     public var shouldDeferEvents: (() -> Bool)?
@@ -116,11 +121,12 @@ public final class AXEventObserver {
         observers.removeAll()
         pendingWindowRegistrations.removeAll()
         pendingRetryPids.removeAll()
+        failedObservePids.removeAll()
     }
 
     @objc private func handleAppLaunched(_ notification: Notification) {
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.activationPolicy == .regular else { return }
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        guard app.activationPolicy == .regular else { return }
         observeApplication(pid: app.processIdentifier)
     }
 
@@ -135,6 +141,10 @@ public final class AXEventObserver {
     @objc private func handleAppActivated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let pid = app.processIdentifier
+        // An app can launch before its activation policy turns regular, so the launch skipped it.
+        if app.activationPolicy == .regular {
+            observeApplication(pid: pid)
+        }
         runOrDefer(key: "didActivateApplication", label: "didActivateApplication", pid: pid) { [weak self] in
             self?.delegate?.applicationActivated(pid: pid)
         }
@@ -239,18 +249,21 @@ public final class AXEventObserver {
             }
         }
 
+        func retryLater() {
+            guard attempt < Self.retryDelays.count, !pendingRetryPids.contains(pid) else { return }
+            pendingRetryPids.insert(pid)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelays[attempt]) { [weak self] in
+                guard let self, self.isRunning, self.pendingRetryPids.remove(pid) != nil else { return }
+                guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
+                self.observeApplication(pid: pid, attempt: attempt + 1)
+            }
+        }
+
         let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         let error = AXObserverCreate(pid, callback, &observer)
         guard error == .success, let obs = observer else {
-            if attempt < Self.retryDelays.count {
-                guard !pendingRetryPids.contains(pid) else { return }
-                pendingRetryPids.insert(pid)
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelays[attempt]) { [weak self] in
-                    guard let self, self.isRunning, self.pendingRetryPids.remove(pid) != nil else { return }
-                    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
-                    self.observeApplication(pid: pid, attempt: attempt + 1)
-                }
-            }
+            failedObservePids.insert(pid)
+            retryLater()
             return
         }
 
@@ -263,11 +276,33 @@ public final class AXEventObserver {
         ]
 
         for notif in notifications {
-            AXObserverAddNotification(obs, appElement, notif as CFString, refcon)
+            let result = AXObserverAddNotification(obs, appElement, notif as CFString, refcon)
+            // A just-launched app answers cannotComplete until its AX is up; an observer without
+            // window creation never sees its windows, so it is dropped and retried. After the last
+            // retry it is kept for the notifications that did register (focus still adopts).
+            if result != .success, notif == kAXWindowCreatedNotification {
+                RibbonLog.log("AX observe failed pid=\(pid) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
+                failedObservePids.insert(pid)
+                if attempt < Self.retryDelays.count {
+                    retryLater()
+                    return
+                }
+            }
         }
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         observers[pid] = obs
+        if failedObservePids.remove(pid) != nil {
+            RibbonLog.log("AX observe succeeded late pid=\(pid) attempt=\(attempt)", category: "discovery")
+            // Callers include discovery and tiling loops, so the sweep runs on a later turn, held
+            // like other app events while a slide runs.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isRunning else { return }
+                self.runOrDefer(key: "observedLate-\(pid)", label: "observedLate", pid: pid) { [weak self] in
+                    self?.delegate?.applicationEventOccurred(kind: .observedLate, pid: pid)
+                }
+            }
+        }
 
         if let pending = pendingWindowRegistrations.removeValue(forKey: pid) {
             for element in pending {
@@ -303,6 +338,7 @@ public final class AXEventObserver {
     public func removeObserver(pid: pid_t) {
         pendingWindowRegistrations.removeValue(forKey: pid)
         pendingRetryPids.remove(pid)
+        failedObservePids.remove(pid)
         if let obs = observers.removeValue(forKey: pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         }
