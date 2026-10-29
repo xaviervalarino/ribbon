@@ -39,6 +39,20 @@ extension WindowManager {
         return CGRect(dictionaryRepresentation: bounds)
     }
 
+    /// WindowServer frames of the app's windows, ordered-out ones included: `serverFrame` returns
+    /// nil for a window that is ordered out, such as a hidden native tab.
+    func serverFrames(pid: pid_t) -> [CGWindowID: CGRect] {
+        guard let list = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [NSDictionary] else { return [:] }
+        var frames: [CGWindowID: CGRect] = [:]
+        for dict in list where (dict[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid {
+            guard let num = dict[kCGWindowNumber as String] as? NSNumber,
+                  let bounds = dict[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds) else { continue }
+            frames[num.uint32Value] = rect
+        }
+        return frames
+    }
+
     /// The app's front-most on-screen normal window, from WindowServer's front-to-back order.
     func frontmostWindowID(pid: pid_t) -> CGWindowID? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary] else {
@@ -67,6 +81,8 @@ extension WindowManager {
 
     func discoverExistingWindows() {
         reconcileWindows(sortHorizontally: true)
+        // Hidden tabs are live windows, so discovery tiles them; collapse each group into one slot.
+        reconcileNativeTabs(pids: Set(allRibbonWindows.map(\.pid)), confirmHides: false)
         syncFocusToFrontmostWindow()
         retile(allSpaces: true)
     }
@@ -109,7 +125,7 @@ extension WindowManager {
 
             let appElem = AXElement.application(pid: app.processIdentifier)
             for win in appElem.windows {
-                guard admits(win), let id = win.windowID else { continue }
+                guard admits(win), let id = win.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { continue }
                 if !allLiveIDs.isEmpty && !allLiveIDs.contains(id) { continue }
 
                 let frame = win.frame ?? .zero
@@ -243,6 +259,7 @@ extension WindowManager {
         lastStashedState.removeValue(forKey: id)
         lastNaturalFrames.removeValue(forKey: id)
         adoptedSinceLastSweep.remove(id)
+        hideCandidates.removeValue(forKey: id)
 
         for sID in ribbons.keys {
             ribbons[sID]?.removeWindow(id: id)
@@ -279,12 +296,11 @@ extension WindowManager {
               let appName = app.localizedName,
               !config.ignoredApps.contains(appName) else { return false }
         guard admits(element) else { return false }
-        guard let id = element.windowID else { return false }
+        // A hidden tab joins only through its group's slot (reconcileNativeTabs), and a new window
+        // waiting to learn whether it is a tab only through its wait (claimNewTab).
+        guard let id = element.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { return false }
 
-        if originalFrames[id] == nil, let frame = element.frame, frame.width > 50 && frame.height > 50 {
-            originalFrames[id] = frame
-            persistOriginalFrames()
-        }
+        rememberOriginalFrame(id: id, element: element)
 
         let sID = upsertWindow(
             win: element,
@@ -308,6 +324,7 @@ extension WindowManager {
         lastStashedState.removeValue(forKey: id)
         lastNaturalFrames.removeValue(forKey: id)
         displayByWindowID.removeValue(forKey: id)
+        hideCandidates.removeValue(forKey: id)
         if let sID = spaceByWindowID.removeValue(forKey: id) {
             ribbons[sID]?.removeWindow(id: id)
         } else {
@@ -315,6 +332,12 @@ extension WindowManager {
                 ribbons[sID]?.removeWindow(id: id)
             }
         }
+    }
+
+    func rememberOriginalFrame(id: CGWindowID, element: AXElement) {
+        guard originalFrames[id] == nil, let frame = element.frame, frame.width > 50 && frame.height > 50 else { return }
+        originalFrames[id] = frame
+        persistOriginalFrames()
     }
 
     func forgetOriginalFrame(id: CGWindowID) {
@@ -337,7 +360,8 @@ extension WindowManager {
         var removedAny = false
         let currentIDs = allRibbonWindows.map(\.id)
         for id in currentIDs {
-            if adoptedSinceLastSweep.contains(id) { continue }
+            // A closed tab's slot waits for its group's next tab (holdClosedTabSlot).
+            if adoptedSinceLastSweep.contains(id) || closedTabSlots[id] != nil { continue }
             if !liveIDs.contains(id) {
                 removeFromRibbon(id: id)
                 removedAny = true
@@ -359,5 +383,8 @@ extension WindowManager {
             scheduleRetile()
         }
         adoptedSinceLastSweep.removeAll()
+
+        let tabPIDs = Set(allRibbonWindows.map(\.pid)).union(nativeTabs.values.map(\.pid))
+        reconcileNativeTabs(pids: tabPIDs, windowList: windowList)
     }
 }

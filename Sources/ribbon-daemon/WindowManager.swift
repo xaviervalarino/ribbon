@@ -88,6 +88,19 @@ public final class WindowManager {
     var trackedWindows: [CGWindowID: AXElement] = [:]
     var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
     var adoptedSinceLastSweep: Set<CGWindowID> = []
+    /// Ordered-out native tabs. They sit outside every ribbon and `trackedWindows`, so Ribbon
+    /// never writes to them; the group's shown tab holds its ribbon slot.
+    var nativeTabs: [CGWindowID: (element: AXElement, pid: pid_t)] = [:]
+    /// Hidden tabs shown without a slot, by first-sighting time in ms; one shown that way for
+    /// `tabConfirmMs` is adopted as a window.
+    var strayTabs: [CGWindowID: Double] = [:]
+    /// Tiled windows ordered out, by first-sighting time in ms; one ordered out for
+    /// `tabConfirmMs` is hidden.
+    var hideCandidates: [CGWindowID: Double] = [:]
+    /// New windows of the frontmost app waiting untiled to learn whether they are tabs.
+    var pendingNewWindows: [CGWindowID: (element: AXElement, pid: pid_t, focus: CGWindowID?, sinceMs: Double)] = [:]
+    /// Slots of closed shown tabs, kept untracked until the group's next tab shows.
+    var closedTabSlots: [CGWindowID: (pid: pid_t, frame: CGRect, sinceMs: Double)] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?
@@ -358,6 +371,11 @@ public final class WindowManager {
         }
 
         appDrivers.removeAll()
+        nativeTabs.removeAll()
+        strayTabs.removeAll()
+        hideCandidates.removeAll()
+        pendingNewWindows.removeAll()
+        closedTabSlots.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,
