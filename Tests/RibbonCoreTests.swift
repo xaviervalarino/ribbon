@@ -301,6 +301,11 @@ func runTests() {
     TestRunner.assertTrue(rightPlan.placements[2].isStashed, "Column past the shared right edge stashes")
     TestRunner.assertFalse(rightPlan.placements[0].isStashed, "Previous column peeks past the free left edge")
 
+    // 12. Browser extension pop-outs float by title
+    TestRunner.assertTrue(Config().floats(title: "Extension: (Bitwarden Password Manager) - Bitwarden"), "Bitwarden pop-out floats")
+    TestRunner.assertTrue(Config().floats(title: "extension: (uBlock Origin)"), "Pattern matches case-insensitively")
+    TestRunner.assertFalse(Config().floats(title: "Bitwarden Web Vault - Zen"), "A browser tab titled Bitwarden still tiles")
+
     guard TestRunner.summary() else {
         exit(1)
     }
