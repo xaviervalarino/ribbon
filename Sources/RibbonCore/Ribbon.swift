@@ -53,6 +53,16 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
+    public mutating func focusRowUp(perRow: Int) {
+        guard !columns.isEmpty, perRow > 0 else { return }
+        activeColumnIndex = max(0, activeColumnIndex - perRow)
+    }
+
+    public mutating func focusRowDown(perRow: Int) {
+        guard !columns.isEmpty, perRow > 0 else { return }
+        activeColumnIndex = min(columns.count - 1, activeColumnIndex + perRow)
+    }
+
     // MARK: - Reordering & Manipulation
 
     public mutating func swapLeft() {
