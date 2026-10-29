@@ -88,6 +88,8 @@ public final class WindowManager {
     var trackedWindows: [CGWindowID: AXElement] = [:]
     var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
     var adoptedSinceLastSweep: Set<CGWindowID> = []
+    /// Native-tab bookkeeping per window; a window has at most one state.
+    var tabStates: [CGWindowID: TabState] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?
@@ -372,6 +374,7 @@ public final class WindowManager {
         }
 
         appDrivers.removeAll()
+        tabStates.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,

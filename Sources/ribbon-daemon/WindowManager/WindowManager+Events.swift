@@ -53,6 +53,13 @@ private struct MainThreadRef: @unchecked Sendable {
 extension WindowManager: AXEventObserverDelegate {
     public func windowCreated(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        let isAdmitted = admits(element)
+        // A new tab opens at its group's frame. Adopting it as a column would move the whole group.
+        if isAdmitted, let id = element.windowID, claimNewTab(element, id: id, pid: pid, focus: isFrontmost ? id : nil) {
+            return
+        }
+
+        let hasTiledWindow = allRibbonWindows.contains { $0.pid == pid }
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         } else if isFrontmost {
@@ -63,10 +70,22 @@ extension WindowManager: AXEventObserverDelegate {
                 }
             }
         }
+        // A tab whose frame settles after creation is caught once it orders its sibling out.
+        if isAdmitted && hasTiledWindow {
+            scheduleTabReconcile(pid: pid)
+        }
     }
 
     public func windowDestroyed(element: AXElement, pid: pid_t) {
+        if dropHiddenTab(for: element) { return }
         guard let id = trackedWindowID(for: element) else { return }
+
+        // Closing a shown tab shows another tab of its group, which takes over the slot and its
+        // restore frame once shown.
+        if holdClosedTabSlot(id, pid: pid) {
+            return
+        }
+
         removeFromRibbon(id: id)
         forgetOriginalFrame(id: id)
         scheduleRetile()
@@ -80,6 +99,8 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowDeminiaturized(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        // A minimize can read as ordered out and hide the window as a tab; it returns as a window.
+        dropHiddenTab(for: element)
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         }
@@ -87,7 +108,8 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowResized(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
-        guard let id = trackedWindowID(for: element) else { return }
+        // A hidden tab follows its group's frame; its resize is not a manual one.
+        guard let id = trackedWindowID(for: element), !isHiddenTab(id) else { return }
 
         // WindowServer bounds trail the app's resize notification by 8-13ms, so a size read here
         // can be the pre-resize size. Any resize inside Ribbon's own echo window is ours, and a
@@ -132,7 +154,7 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowMoved(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
-        guard let id = trackedWindowID(for: element) else { return }
+        guard let id = trackedWindowID(for: element), !isHiddenTab(id) else { return }
 
         let now = observer.currentEventTime
         // WindowServer bounds trail the app's move notification, so inside Ribbon's own echo
@@ -191,6 +213,16 @@ extension WindowManager: AXEventObserverDelegate {
             return
         }
 
+        // A tab switch focuses a hidden tab: it takes over its group's slot, never a new column.
+        if isHiddenTab(id) {
+            fillClosedTabSlot(pid: pid, shown: id)
+            reconcileNativeTabs(pids: [pid], focus: id)
+            if spaceByWindowID[id] == nil {
+                scheduleTabReconcile(pid: pid, focus: id)
+                return
+            }
+        }
+
         // A real (user-initiated) focus usually precedes a manual drag; the
         // diff cache can't see drags yet (kAXMoved lands in Phase 4), so
         // evict this window's entry to force a fresh frame write next retile.
@@ -209,6 +241,10 @@ extension WindowManager: AXEventObserverDelegate {
 
         if foundSpaceID == nil {
             if let onScreen = onScreenWindowIDs(), onScreen.contains(id), admits(element) {
+                // A new tab's focus event can arrive before its creation event.
+                if claimNewTab(element, id: id, pid: pid, focus: id) {
+                    return
+                }
                 if adopt(element: element, pid: pid, activate: true) {
                     scheduleRetile()
                     return
@@ -313,6 +349,14 @@ extension WindowManager: AXEventObserverDelegate {
     public func applicationTerminated(pid: pid_t) {
         removeAppDriver(for: pid)
         let matchingIDs = Set(allRibbonWindows.filter { $0.pid == pid }.map { $0.id })
+        tabStates = tabStates.filter { id, state in
+            switch state {
+            case let .hidden(_, tabPID, _), let .closedSlot(tabPID, _, _):
+                return tabPID != pid
+            case .orderedOut:
+                return !matchingIDs.contains(id)
+            }
+        }
         for id in matchingIDs {
             trackedWindows.removeValue(forKey: id)
             lastAppliedFrames.removeValue(forKey: id)

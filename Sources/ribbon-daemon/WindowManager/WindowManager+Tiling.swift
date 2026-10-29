@@ -159,6 +159,8 @@ extension WindowManager {
         let slideMs = config.scrollAnimationMs
 
         for entry in frames {
+            // A closed tab's held slot has no element until its group's next tab takes it over.
+            if closedSlot(entry.id) != nil { continue }
             var elem = trackedWindows[entry.id]
             if elem == nil {
                 let appElem = AXElement.application(pid: entry.pid)
