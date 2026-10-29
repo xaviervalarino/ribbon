@@ -121,7 +121,9 @@ public struct Ribbon: Sendable, Codable {
     @discardableResult
     public mutating func adjustWidth(by delta: Double) -> Double {
         guard let current = effectiveWidthRatio else { return 0.0 }
-        let newRatio = max(0.15, min(1.0, current + delta))
+        // Rounding to a thousandth keeps repeated steps from drifting (0.5 + 0.1 + 0.1 - 0.2
+        // lands below 0.5 and floors a pixel short).
+        let newRatio = max(0.15, min(1.0, ((current + delta) * 1000).rounded() / 1000))
         // A clamped no-op keeps the stored ratio, which a lone auto-expanded column needs once a
         // second column joins.
         guard abs(newRatio - current) >= 0.0001 else { return 0.0 }
