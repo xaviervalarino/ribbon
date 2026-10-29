@@ -194,6 +194,17 @@ func runTests() {
     )
     let rightParkedRect = QuartzRect(origin: rightOrigin, size: winSize)
     TestRunner.assertTrue(FreeEdgeStashEngine.isZeroBleed(rect: rightParkedRect, hostID: 1, allDisplays: displays), "Blocked right edge parks window with zero bleed into D2")
+    TestRunner.assertEqual(rightParkedRect.maxX, d1Quartz.minX + 1.0, "Right wing of D1 parks at D1's free left edge, not the clamped bottom")
+    TestRunner.assertEqual(rightParkedRect.minY, 100, "Side-edge stash keeps the tiled Y")
+
+    let d2LeftOrigin = FreeEdgeStashEngine.parkedOrigin(
+        windowSize: winSize,
+        tiledY: 100,
+        wing: .left,
+        targetDisplay: d2Bounds,
+        allDisplays: displays
+    )
+    TestRunner.assertEqual(d2LeftOrigin.x, d2Quartz.maxX - 1.0, "Left wing of D2 parks at D2's free right edge")
 
     // 12. Stashed Window Size Invariance (Zero AX Resize / Delta W/H = 0)
     let threeColRibbon = Ribbon(

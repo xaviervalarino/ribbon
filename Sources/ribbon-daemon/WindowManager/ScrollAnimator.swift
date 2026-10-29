@@ -8,7 +8,8 @@ import QuartzCore
 ///
 /// - Windows move along their strip (natural) positions and are pinned at their stash sliver
 ///   only while past it, so off-screen windows join and leave in step with their neighbors.
-///   Half past a shared display edge they show at their top/bottom stash instead.
+///   Half past a shared display edge they show at their stash on the far side edge (or the
+///   top/bottom) instead.
 /// - Frames come from the main display's CADisplayLink (up to 120Hz), kept alive and paused
 ///   between slides so the first frame is not delayed by link creation.
 /// - Each PID has at most one slide step in flight, so a slow app skips frames instead of
@@ -27,8 +28,9 @@ final class ScrollAnimator: @unchecked Sendable {
     struct Parking {
         var minX: CGFloat?
         var maxX: CGFloat?
-        /// Top/bottom stashes the window shows at while its strip position lies half or more
-        /// past a shared display edge, where macOS would move it to the neighbor and shrink it.
+        /// Stashes off the window's path (far side edge, top or bottom) it shows at while its strip
+        /// position lies half or more past a shared display edge, where macOS would move it to the
+        /// neighbor and shrink it.
         var belowMinX: EdgeSwap?
         var aboveMaxX: EdgeSwap?
     }
