@@ -185,7 +185,8 @@ extension WindowManager {
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
-        if action != "modifier" {
+        // A pan survives the caps state that drives it and commands that change nothing.
+        if action != "modifier" && action != "status" {
             panController.endPan(snap: false)
         }
 

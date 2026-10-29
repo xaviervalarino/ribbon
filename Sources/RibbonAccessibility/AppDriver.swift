@@ -22,6 +22,8 @@ public actor AppDriver {
         public let shouldFocus: Bool
         /// A slide's settled frame; a later slide moving the window carries its own final, so this one is dropped.
         public let isSlideFinal: Bool
+        /// Skips per-write AX log lines during high-frequency flushes such as a strip pan.
+        public let quiet: Bool
 
         public init(
             element: AXElement,
@@ -30,7 +32,8 @@ public actor AppDriver {
             needsFullFrame: Bool,
             needsMove: Bool = true,
             shouldFocus: Bool = false,
-            isSlideFinal: Bool = false
+            isSlideFinal: Bool = false,
+            quiet: Bool = false
         ) {
             self.element = element
             self.windowID = windowID
@@ -39,6 +42,7 @@ public actor AppDriver {
             self.needsMove = needsMove
             self.shouldFocus = shouldFocus
             self.isSlideFinal = isSlideFinal
+            self.quiet = quiet
         }
 
         /// Keeps only the focus, for when a newer mutation replaces this one's frame.
@@ -133,7 +137,8 @@ public actor AppDriver {
                     needsFullFrame: mutation.needsFullFrame || existing.needsFullFrame,
                     needsMove: mutation.needsMove || existing.needsMove,
                     shouldFocus: mutation.shouldFocus || existing.shouldFocus,
-                    isSlideFinal: mutation.needsMove ? mutation.isSlideFinal : existing.isSlideFinal
+                    isSlideFinal: mutation.needsMove ? mutation.isSlideFinal : existing.isSlideFinal,
+                    quiet: mutation.needsMove ? (mutation.quiet && existing.quiet) : existing.quiet
                 )
             } else {
                 pendingMutations[mutation.windowID] = mutation
@@ -193,10 +198,12 @@ public actor AppDriver {
                 // Window size genuinely changed: AX resize required so target app reflows views.
                 writeError = mutation.element.setFrame(mutation.frame)
                 if writeError == .success {
-                    RibbonLog.log(
-                        "AX frame applied wid=\(winID) pid=\(pid) target=\(mutation.frame.integral)",
-                        category: "layout"
-                    )
+                    if !mutation.quiet {
+                        RibbonLog.log(
+                            "AX frame applied wid=\(winID) pid=\(pid) target=\(mutation.frame.integral)",
+                            category: "layout"
+                        )
+                    }
                     // Apps hold windows at their minimum height; the layout makes room once it knows it.
                     if let live = mutation.element.size, live.height >= mutation.frame.height + 2 {
                         onMinHeight?(winID, live.height)
@@ -205,7 +212,7 @@ public actor AppDriver {
             } else {
                 // Pure translation: single AX position write with zero resize roundtrips.
                 writeError = mutation.element.setPosition(mutation.frame.origin)
-                if writeError == .success {
+                if writeError == .success, !mutation.quiet {
                     RibbonLog.log(
                         "AX position applied wid=\(winID) pid=\(pid) target=\(mutation.frame.origin)",
                         category: "layout"

@@ -186,6 +186,24 @@ final class ScrollAnimator: @unchecked Sendable {
         settledFocus = (pid, mutation)
     }
 
+    /// Stops in-flight slides for `windowIDs` without running their final mutations, so direct
+    /// position writes (such as a pan) take over immediately.
+    func cancel(windowIDs: Set<CGWindowID>) {
+        let wasActive = isActive
+        for id in windowIDs {
+            tracks.removeValue(forKey: id)
+            landingWatches.removeValue(forKey: id)
+        }
+        if let focus = settledFocus, windowIDs.contains(focus.mutation.windowID) {
+            settledFocus = nil
+        }
+        if wasActive && !isActive {
+            pauseFrames()
+            holdStartMs = nil
+            onIdle?()
+        }
+    }
+
     private func resumeFrames() {
         lastTickMs = nil
         if displayLink == nil, fallbackTimer == nil,
