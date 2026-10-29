@@ -27,6 +27,12 @@ final class InputTap {
     private var loggedUnavailable = false
     private var gestureMonitoring = false
     private var pointerMonitoring = false
+    /// While caps is held the cursor stays where caps went down and mouse motion only pans: each
+    /// move warps it back. A warp holds off local mouse events for the suppression interval;
+    /// 0.07s is the shortest that still holds the cursor still, and the default 0.25s would stall
+    /// it after release.
+    private var frozenPointer: CGPoint?
+    private var defaultSuppressionInterval: CFTimeInterval?
 
     /// Only events with a delegate consumer are in the mask: every masked event wakes the main
     /// run loop, and a backed-up port drops events (a lost mouse-up included).
@@ -44,7 +50,32 @@ final class InputTap {
     func setPointerMonitoring(_ on: Bool) {
         guard on != pointerMonitoring else { return }
         pointerMonitoring = on
+        if on {
+            freezePointer()
+        } else {
+            unfreezePointer()
+        }
         start()
+    }
+
+    private func freezePointer() {
+        guard let location = CGEvent(source: nil)?.location,
+              let source = CGEventSource(stateID: .combinedSessionState) else { return }
+        if frozenPointer == nil {
+            defaultSuppressionInterval = source.localEventsSuppressionInterval
+        }
+        source.localEventsSuppressionInterval = 0.07
+        frozenPointer = location
+    }
+
+    func unfreezePointer() {
+        guard let point = frozenPointer,
+              let source = CGEventSource(stateID: .combinedSessionState) else { return }
+        frozenPointer = nil
+        // A zero interval hands the cursor back to the mouse at once after the last warp.
+        source.localEventsSuppressionInterval = 0
+        CGWarpMouseCursorPosition(point)
+        source.localEventsSuppressionInterval = defaultSuppressionInterval ?? 0.25
     }
 
     func setGestureMonitoring(_ on: Bool) {
@@ -105,6 +136,9 @@ final class InputTap {
         case .leftMouseUp:
             delegate?.mouseUp()
         case .mouseMoved, .leftMouseDragged:
+            if type == .mouseMoved, let frozenPointer {
+                CGWarpMouseCursorPosition(frozenPointer)
+            }
             let dx = event.getDoubleValueField(.mouseEventDeltaX)
             let dy = event.getDoubleValueField(.mouseEventDeltaY)
             delegate?.mouseMoved(dx: dx, dy: dy)
