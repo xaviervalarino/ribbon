@@ -32,7 +32,7 @@ final class InputTap {
     /// 0.07s is the shortest that still holds the cursor still, and the default 0.25s would stall
     /// it after release.
     private var frozenPointer: CGPoint?
-    private var defaultSuppressionInterval: CFTimeInterval?
+    private var defaultSuppressionInterval: CFTimeInterval = 0.25
 
     /// Only events with a delegate consumer are in the mask: every masked event wakes the main
     /// run loop, and a backed-up port drops events (a lost mouse-up included).
@@ -75,7 +75,7 @@ final class InputTap {
         // A zero interval hands the cursor back to the mouse at once after the last warp.
         source.localEventsSuppressionInterval = 0
         CGWarpMouseCursorPosition(point)
-        source.localEventsSuppressionInterval = defaultSuppressionInterval ?? 0.25
+        source.localEventsSuppressionInterval = defaultSuppressionInterval
     }
 
     func setGestureMonitoring(_ on: Bool) {
