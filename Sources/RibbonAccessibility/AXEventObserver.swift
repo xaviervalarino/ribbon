@@ -263,7 +263,10 @@ public final class AXEventObserver {
         ]
 
         for notif in notifications {
-            AXObserverAddNotification(obs, appElement, notif as CFString, refcon)
+            let result = AXObserverAddNotification(obs, appElement, notif as CFString, refcon)
+            if result != .success {
+                RibbonLog.log("AX observe failed pid=\(pid) \(notif) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
+            }
         }
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
