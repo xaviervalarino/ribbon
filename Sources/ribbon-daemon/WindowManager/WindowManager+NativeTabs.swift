@@ -201,30 +201,52 @@ extension WindowManager {
         scheduleTabReconcile(pid: pid, focus: focus)
     }
 
-    /// Keeps a closed tab's slot until its group's next tab shows, for up to `newTabWaitMs`. The slot
-    /// has no element meanwhile, so retiles skip it: the next tab may still be ordered out, and a
-    /// frame written to a hidden tab moves its group.
-    func holdClosedTabSlot(_ id: CGWindowID, pid: pid_t) {
+    /// Keeps a closed tab's slot until its group's next tab shows, for up to `newTabWaitMs`, and
+    /// returns false when no hidden tab shares the slot's x and width (the group had one tab). The
+    /// slot has no element meanwhile, so retiles skip it: the next tab may still be ordered out, and
+    /// a frame written to a hidden tab moves its group.
+    func holdClosedTabSlot(_ id: CGWindowID, pid: pid_t) -> Bool {
+        guard let frame = lastAppliedFrames[id] else { return false }
+        let frames = serverFrames(pid: pid)
+        guard nativeTabIDs(pid: pid).contains(where: { frames[$0]?.isSameColumn(frame) ?? false }) else { return false }
         if let element = trackedWindows.removeValue(forKey: id) {
             windowIDsByElement.removeValue(forKey: element.rawElement)
         }
-        closedTabSlots[id] = (pid: pid, sinceMs: CACurrentMediaTime() * 1000)
-        if !fillClosedTabSlot(pid: pid, shown: nil) {
+        closedTabSlots[id] = (pid: pid, frame: frame, sinceMs: CACurrentMediaTime() * 1000)
+        if !fillClosedTabSlot(id, shown: nil) {
             pollClosedTabSlot(id)
         }
+        return true
     }
 
-    /// Hands the app's held closed-tab slot to `shown` (a hidden tab that just took focus), else to
-    /// the app's hidden tab now on screen. False while no tab has shown.
+    /// Hands the app's held closed-tab slot at `shown`'s x and width to `shown`, a hidden tab that
+    /// just took focus.
+    func fillClosedTabSlot(pid: pid_t, shown: CGWindowID) {
+        guard let shownFrame = serverFrames(pid: pid)[shown],
+              let slot = closedTabSlots.first(where: { $0.value.pid == pid && $0.value.frame.isSameColumn(shownFrame) })?.key
+        else { return }
+        fillClosedTabSlot(slot, shown: shown)
+    }
+
+    /// Hands the closed-tab slot to `shown`, else to a hidden tab of its group now on screen. False
+    /// while no tab of the group has shown.
     @discardableResult
-    func fillClosedTabSlot(pid: pid_t, shown: CGWindowID?) -> Bool {
-        guard let slot = closedTabSlots.first(where: { $0.value.pid == pid })?.key else { return false }
-        let onScreen = shown == nil ? (onScreenWindowIDs() ?? []) : []
-        guard let new = shown ?? nativeTabIDs(pid: pid).first(where: onScreen.contains),
-              let tab = nativeTabs[new] else { return false }
+    private func fillClosedTabSlot(_ slot: CGWindowID, shown: CGWindowID?) -> Bool {
+        guard let held = closedTabSlots[slot] else { return false }
+        let candidate: CGWindowID?
+        if let shown {
+            candidate = shown
+        } else {
+            let onScreen = onScreenWindowIDs() ?? []
+            let frames = serverFrames(pid: held.pid)
+            candidate = nativeTabIDs(pid: held.pid).first { id in
+                onScreen.contains(id) && (frames[id]?.isSameColumn(held.frame) ?? false)
+            }
+        }
+        guard let new = candidate, let tab = nativeTabs[new] else { return false }
         closedTabSlots.removeValue(forKey: slot)
-        if swapTab(out: slot, in: new, element: tab.element, pid: pid, focus: shown) {
-            scheduleTabReconcile(pid: pid)
+        if swapTab(out: slot, in: new, element: tab.element, pid: held.pid, focus: shown) {
+            scheduleTabReconcile(pid: held.pid)
         } else {
             removeFromRibbon(id: slot)
         }
@@ -234,16 +256,16 @@ extension WindowManager {
 
     private func pollClosedTabSlot(_ id: CGWindowID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
-            guard let self, !self.isStopped, let slot = self.closedTabSlots[id] else { return }
-            if self.fillClosedTabSlot(pid: slot.pid, shown: nil) { return }
-            guard CACurrentMediaTime() * 1000 - slot.sinceMs >= self.newTabWaitMs else {
+            guard let self, !self.isStopped, let held = self.closedTabSlots[id] else { return }
+            if self.fillClosedTabSlot(id, shown: nil) { return }
+            guard CACurrentMediaTime() * 1000 - held.sinceMs >= self.newTabWaitMs else {
                 self.pollClosedTabSlot(id)
                 return
             }
             self.closedTabSlots.removeValue(forKey: id)
             self.removeFromRibbon(id: id)
             self.scheduleRetile()
-            self.scheduleTabReconcile(pid: slot.pid)
+            self.scheduleTabReconcile(pid: held.pid)
         }
     }
 
