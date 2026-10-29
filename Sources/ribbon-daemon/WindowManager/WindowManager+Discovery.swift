@@ -67,6 +67,8 @@ extension WindowManager {
 
     func discoverExistingWindows() {
         reconcileWindows(sortHorizontally: true)
+        // Hidden tabs are live windows, so discovery tiles them; collapse each group into one slot.
+        reconcileNativeTabs(pids: Set(allRibbonWindows.map(\.pid)), confirmHides: false)
         syncFocusToFrontmostWindow()
         retile(allSpaces: true)
     }
@@ -109,7 +111,7 @@ extension WindowManager {
 
             let appElem = AXElement.application(pid: app.processIdentifier)
             for win in appElem.windows {
-                guard admits(win), let id = win.windowID else { continue }
+                guard admits(win), let id = win.windowID, nativeTabs[id] == nil else { continue }
                 if !allLiveIDs.isEmpty && !allLiveIDs.contains(id) { continue }
 
                 let frame = win.frame ?? .zero
@@ -279,7 +281,8 @@ extension WindowManager {
               let appName = app.localizedName,
               !config.ignoredApps.contains(appName) else { return false }
         guard admits(element) else { return false }
-        guard let id = element.windowID else { return false }
+        // A hidden tab joins only through its group's slot (reconcileNativeTabs).
+        guard let id = element.windowID, nativeTabs[id] == nil else { return false }
 
         if originalFrames[id] == nil, let frame = element.frame, frame.width > 50 && frame.height > 50 {
             originalFrames[id] = frame
@@ -359,5 +362,8 @@ extension WindowManager {
             scheduleRetile()
         }
         adoptedSinceLastSweep.removeAll()
+
+        let tabPIDs = Set(allRibbonWindows.map(\.pid)).union(nativeTabs.values.map(\.pid))
+        reconcileNativeTabs(pids: tabPIDs, windowList: windowList)
     }
 }

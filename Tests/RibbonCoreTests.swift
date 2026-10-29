@@ -301,6 +301,47 @@ func runTests() {
     TestRunner.assertTrue(rightPlan.placements[2].isStashed, "Column past the shared right edge stashes")
     TestRunner.assertFalse(rightPlan.placements[0].isStashed, "Previous column peeks past the free left edge")
 
+    // 12. Replacing a window keeps its slot
+    func tab(_ id: CGWindowID) -> WindowModel {
+        WindowModel(id: id, pid: 7, title: "Tab \(id)", appName: "Ghostty")
+    }
+    var tabRibbon = Ribbon(columns: [
+        ColumnModel(windows: [tab(601)], widthRatio: 0.5),
+        ColumnModel(windows: [tab(602)], widthRatio: 0.8, hasExplicitSingleWidth: true)
+    ], activeColumnIndex: 1)
+    TestRunner.assertTrue(tabRibbon.replaceWindow(id: 602, with: tab(603)), "Replace reports a change")
+    TestRunner.assertEqual(tabRibbon.columns.count, 2, "Replace keeps the column count")
+    TestRunner.assertEqual(tabRibbon.columns[1].windows.map(\.id), [603], "New window takes the slot")
+    TestRunner.assertEqual(tabRibbon.columns[1].widthRatio, 0.8, "Replace keeps the column width")
+    TestRunner.assertTrue(tabRibbon.columns[1].hasExplicitSingleWidth, "Replace keeps the explicit width flag")
+    TestRunner.assertEqual(tabRibbon.activeColumnIndex, 1, "Replace keeps the active column")
+    TestRunner.assertEqual(tabRibbon.activeWindow?.id, 603, "The replaced slot stays active")
+
+    var ownColumn = Ribbon(columns: [
+        ColumnModel(windows: [tab(611)], widthRatio: 0.6),
+        ColumnModel(windows: [tab(612)], widthRatio: 0.5),
+        ColumnModel(windows: [tab(613)], widthRatio: 0.4)
+    ], activeColumnIndex: 2)
+    TestRunner.assertTrue(ownColumn.replaceWindow(id: 611, with: tab(613)), "Replace with a tiled window")
+    TestRunner.assertEqual(ownColumn.columns.map { $0.windows.map(\.id) }, [[613], [612]], "The window's own column is removed")
+    TestRunner.assertEqual(ownColumn.columns[0].widthRatio, 0.6, "The slot keeps its width")
+    TestRunner.assertEqual(ownColumn.activeWindow?.id, 613, "The slot is active when the moved window was")
+
+    let untouched = Ribbon(columns: [ColumnModel(windows: [tab(621)])], activeColumnIndex: 0)
+    var absent = untouched
+    TestRunner.assertFalse(absent.replaceWindow(id: 699, with: tab(622)), "Absent id reports no change")
+    TestRunner.assertEqual(absent.columns, untouched.columns, "Absent id leaves the columns unchanged")
+    TestRunner.assertEqual(absent.activeColumnIndex, untouched.activeColumnIndex, "Absent id leaves the active column")
+
+    var stacked2 = Ribbon(columns: [
+        ColumnModel(windows: [tab(631)]),
+        ColumnModel(windows: [tab(632), tab(633), tab(634)], activeRowIndex: 0)
+    ], activeColumnIndex: 0)
+    TestRunner.assertTrue(stacked2.replaceWindow(id: 633, with: tab(635)), "Replace in a stacked column")
+    TestRunner.assertEqual(stacked2.columns[1].windows.map(\.id), [632, 635, 634], "Replace keeps the row")
+    TestRunner.assertEqual(stacked2.columns[1].activeRowIndex, 0, "An inactive slot leaves the active row")
+    TestRunner.assertEqual(stacked2.activeColumnIndex, 0, "An inactive slot leaves the active column")
+
     guard TestRunner.summary() else {
         exit(1)
     }

@@ -88,6 +88,13 @@ public final class WindowManager {
     var trackedWindows: [CGWindowID: AXElement] = [:]
     var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
     var adoptedSinceLastSweep: Set<CGWindowID> = []
+    /// Ordered-out native tabs. They sit outside every ribbon and `trackedWindows`, so Ribbon
+    /// never writes to them; the group's shown tab holds its ribbon slot.
+    var nativeTabs: [CGWindowID: (element: AXElement, pid: pid_t)] = [:]
+    /// Hidden tabs seen on screen without a slot on the last reconcile pass; a second sighting adopts them.
+    var strayTabs: Set<CGWindowID> = []
+    /// Tiled windows seen ordered out on the last reconcile pass; a second sighting hides them.
+    var hideCandidates: Set<CGWindowID> = []
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?
@@ -358,6 +365,9 @@ public final class WindowManager {
         }
 
         appDrivers.removeAll()
+        nativeTabs.removeAll()
+        strayTabs.removeAll()
+        hideCandidates.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,
