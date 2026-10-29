@@ -107,23 +107,9 @@ final class PanController {
         var targetWindowID = r.activeWindow?.id
         if canvasWidth > 0 {
             let geometry = LayoutEngine.columnGeometry(for: r, canvasWidth: canvasWidth, config: wm.config)
-            let offset = r.viewportOffset
-            func visibleWidth(at index: Int) -> Double {
-                let col = geometry[index]
-                let left = max(0, col.x - offset)
-                let right = min(canvasWidth, col.x - offset + col.width)
-                return max(0, right - left)
-            }
-            var bestIndex = max(0, min(r.activeColumnIndex, geometry.count - 1))
-            var bestWidth = visibleWidth(at: bestIndex)
-            for index in geometry.indices {
-                let width = visibleWidth(at: index)
-                if width > bestWidth {
-                    bestWidth = width
-                    bestIndex = index
-                }
-            }
-            if let winID = r.columns[bestIndex].activeWindow?.id {
+            if let bestIndex = LayoutEngine.panSnapColumn(geometry: geometry, offset: r.viewportOffset,
+                                                          canvasWidth: canvasWidth, activeIndex: r.activeColumnIndex),
+               let winID = r.columns[bestIndex].activeWindow?.id {
                 _ = r.focus(windowID: winID)
                 targetWindowID = winID
             }

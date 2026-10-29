@@ -320,6 +320,22 @@ func runTests() {
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.90, dy: 0, config: config), .focusRight, "Fast flick fires one step")
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), nil, "Excess travel past threshold is dropped")
 
+    // 13. A released pan focuses a fully visible column so the strip stays put
+    let panGeometry: [(x: Double, width: Double)] = [(x: 0, width: 750), (x: 760, width: 1200), (x: 1970, width: 1200)]
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 0, canvasWidth: 1500, activeIndex: 1), 0,
+                           "Panned to the left end, the fully visible left column wins over the half-visible active one")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 700, canvasWidth: 1500, activeIndex: 0), 1,
+                           "The active column scrolled off loses to the fully visible one")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 1100, canvasWidth: 1500, activeIndex: 2), 1,
+                           "With nothing fully visible, the most visible column wins over the active one")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 1215, canvasWidth: 1500, activeIndex: 2), 2,
+                           "A tie in visible width keeps the active column")
+    let narrowGeometry: [(x: Double, width: Double)] = [(x: 0, width: 400), (x: 410, width: 400), (x: 820, width: 400)]
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: narrowGeometry, offset: 0, canvasWidth: 1500, activeIndex: 2), 2,
+                           "A fully visible active column keeps focus")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: [], offset: 0, canvasWidth: 1500, activeIndex: 0), nil,
+                           "No columns, no target")
+
     guard TestRunner.summary() else {
         exit(1)
     }
