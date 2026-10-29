@@ -238,7 +238,7 @@ extension WindowManager: AXEventObserverDelegate {
                     RibbonLog.log("focus event moved activeColumn \(oldActive)->\(r.activeColumnIndex) to wid=\(id) pid=\(pid)", category: "focus")
                     ribbons[sID] = r
                     if isVisibleSpace {
-                        scheduleRetile()
+                        scheduleRetile(animated: true)
                     }
                 }
             }

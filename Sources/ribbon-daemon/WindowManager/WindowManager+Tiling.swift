@@ -39,11 +39,15 @@ extension WindowManager {
 
     // MARK: - Debounced Retile
 
-    func scheduleRetile() {
+    func scheduleRetile(animated: Bool = false) {
+        retileAnimated = retileAnimated || animated
         if retileWork != nil { return }
         let work = DispatchWorkItem { [weak self] in
-            self?.retileWork = nil
-            self?.retile()
+            guard let self else { return }
+            self.retileWork = nil
+            let shouldAnimate = self.retileAnimated
+            self.retileAnimated = false
+            self.retile(animated: shouldAnimate)
         }
         retileWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: work)
@@ -52,6 +56,7 @@ extension WindowManager {
     func retileNow(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false) {
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
         retile(allSpaces: allSpaces, focusWindowID: focusWindowID, animated: animated)
     }
 
