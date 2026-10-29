@@ -191,10 +191,8 @@ extension WindowManager: AXEventObserverDelegate {
             return
         }
 
-        // A real (user-initiated) focus usually precedes a manual drag; the
-        // diff cache can't see drags yet (kAXMoved lands in Phase 4), so
-        // evict this window's entry to force a fresh frame write next retile.
-        lastAppliedFrames.removeValue(forKey: id)
+        // The cached frame stays: an animated click retile slides from it (a parked window from its
+        // parking spot), and windowMoved evicts it when the user drags the window.
 
         var foundSpaceID = spaceByWindowID[id]
         if foundSpaceID == nil {
