@@ -91,10 +91,12 @@ public final class WindowManager {
     /// Ordered-out native tabs. They sit outside every ribbon and `trackedWindows`, so Ribbon
     /// never writes to them; the group's shown tab holds its ribbon slot.
     var nativeTabs: [CGWindowID: (element: AXElement, pid: pid_t)] = [:]
-    /// Hidden tabs seen on screen without a slot on the last reconcile pass; a second sighting adopts them.
-    var strayTabs: Set<CGWindowID> = []
-    /// Tiled windows seen ordered out on the last reconcile pass; a second sighting hides them.
-    var hideCandidates: Set<CGWindowID> = []
+    /// Hidden tabs shown without a slot, by first-sighting time in ms; one shown that way for
+    /// `tabConfirmMs` is adopted as a window.
+    var strayTabs: [CGWindowID: Double] = [:]
+    /// Tiled windows ordered out, by first-sighting time in ms; one ordered out for
+    /// `tabConfirmMs` is hidden.
+    var hideCandidates: [CGWindowID: Double] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?

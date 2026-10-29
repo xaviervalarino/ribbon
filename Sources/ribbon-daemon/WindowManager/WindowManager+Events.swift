@@ -53,13 +53,10 @@ private struct MainThreadRef: @unchecked Sendable {
 extension WindowManager: AXEventObserverDelegate {
     public func windowCreated(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        let isAdmitted = admits(element)
         // A new tab opens at its group's frame. Adopting it as a column would move the whole group.
-        if admits(element), let id = element.windowID, let sibling = tabSibling(of: element, pid: pid) {
-            let frame = serverFrame(id).map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
-            RibbonLog.log("native tab candidate wid=\(id) sibling=\(sibling) frame=\(frame)", category: "tabs")
-            nativeTabs[id] = (element: element, pid: pid)
-            observer.observeWindow(element: element, pid: pid)
-            scheduleTabReconcile(pid: pid, focus: isFrontmost ? id : nil)
+        if isAdmitted, let id = element.windowID, let sibling = tabSibling(of: element, pid: pid) {
+            holdTabCandidate(element, id: id, sibling: sibling, pid: pid, focus: isFrontmost ? id : nil)
             return
         }
 
@@ -75,7 +72,7 @@ extension WindowManager: AXEventObserverDelegate {
             }
         }
         // A tab whose frame settles after creation is caught once it orders its sibling out.
-        if hasTiledWindow {
+        if isAdmitted && hasTiledWindow {
             scheduleTabReconcile(pid: pid)
         }
     }
@@ -92,13 +89,13 @@ extension WindowManager: AXEventObserverDelegate {
         let siblings = nativeTabIDs(pid: pid).filter { $0 != id }
         if !siblings.isEmpty {
             let onScreen = onScreenWindowIDs() ?? []
-            let lastSize = lastAppliedFrames[id]?.size
-            let sizeMatch = siblings.first { sibling in
-                guard let lastSize, let size = serverFrame(sibling)?.size else { return false }
-                return size.isNear(lastSize)
+            let lastFrame = lastAppliedFrames[id]
+            let frameMatch = siblings.first { sibling in
+                guard let lastFrame, let frame = serverFrame(sibling) else { return false }
+                return frame.isNear(lastFrame)
             }
             // Any other sibling may belong to another group of the app; a frame write would move that group.
-            if let replacement = siblings.first(where: onScreen.contains) ?? sizeMatch,
+            if let replacement = siblings.first(where: onScreen.contains) ?? frameMatch,
                let tab = nativeTabs[replacement],
                swapTab(out: id, in: replacement, element: tab.element, pid: pid) {
                 dropNativeTab(id)
@@ -122,6 +119,10 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowDeminiaturized(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        // A minimize can read as ordered out and hide the window as a tab; it returns as a window.
+        if let tabID = nativeTabs.first(where: { CFEqual($0.value.element.rawElement, element.rawElement) })?.key {
+            dropNativeTab(tabID)
+        }
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         }
@@ -261,6 +262,11 @@ extension WindowManager: AXEventObserverDelegate {
 
         if foundSpaceID == nil {
             if let onScreen = onScreenWindowIDs(), onScreen.contains(id), admits(element) {
+                // A new tab's focus event can arrive before its creation event.
+                if let sibling = tabSibling(of: element, pid: pid) {
+                    holdTabCandidate(element, id: id, sibling: sibling, pid: pid, focus: id)
+                    return
+                }
                 if adopt(element: element, pid: pid, activate: true) {
                     scheduleRetile()
                     return

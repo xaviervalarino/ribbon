@@ -10,12 +10,16 @@ import CoreGraphics
 // holds one ribbon slot, owned by its shown tab; hidden tabs live in `nativeTabs`.
 
 extension WindowManager {
+    /// How long a window stays ordered out before it is hidden, or a hidden tab stays shown
+    /// without a slot before it is adopted. A tab switch settles well inside it.
+    var tabConfirmMs: Double { 500 }
+
     /// Swaps each tiled window of `pids` that is ordered out for its group's shown tab, hides an
-    /// ordered-out window while its app shows another window, and adopts a hidden tab seen on
-    /// screen without a slot on two consecutive passes. Hiding also takes two consecutive passes
-    /// unless `confirmHides` is false: mid space switch, a window can read as ordered out while
-    /// its space still reads as visible. Costs one `.optionAll` and one on-screen window list
-    /// read; pass `windowList` to reuse an `.optionAll` list read moments earlier.
+    /// ordered-out window while its app shows another window, and adopts a hidden tab shown
+    /// without a slot. Hiding and adopting wait until the state has held for `tabConfirmMs`;
+    /// `confirmHides: false` hides at once. Mid space switch, a window can read as ordered out
+    /// while its space still reads as visible. Costs one `.optionAll` and one on-screen window
+    /// list read; pass `windowList` to reuse an `.optionAll` list read moments earlier.
     func reconcileNativeTabs(
         pids: Set<pid_t>,
         focus: CGWindowID? = nil,
@@ -47,6 +51,7 @@ extension WindowManager {
         guard !liveIDs.isEmpty else { return }
 
         let visibleSpaces = Set(SpaceManager.currentTopology().activeSpaceByDisplay.values)
+        let now = CACurrentMediaTime() * 1000
         var changed = false
 
         for pid in pids.sorted() {
@@ -67,31 +72,44 @@ extension WindowManager {
             let pidTabs = nativeTabIDs(pid: pid)
             let shownTabs = pidTabs.filter(onScreen.contains)
 
-            // A tab marked stray on an earlier pass and hidden since starts over.
-            strayTabs.subtract(pidTabs.filter { !onScreen.contains($0) })
+            // A stray tab hidden again starts over.
+            for id in pidTabs where !onScreen.contains(id) {
+                strayTabs.removeValue(forKey: id)
+            }
 
-            // A window seen ordered out once starts over when it shows again or dies.
-            hideCandidates = hideCandidates.filter { liveIDs.contains($0) && (!tiledIDs.contains($0) || offTiled.contains($0)) }
+            // An ordered-out window starts over when it shows again or dies.
+            hideCandidates = hideCandidates.filter { entry in
+                liveIDs.contains(entry.key) && (!tiledIDs.contains(entry.key) || offTiled.contains(entry.key))
+            }
 
             var placed = Set<CGWindowID>()
             for old in offTiled {
                 let candidates = shownTabs.filter { !placed.contains($0) }
-                let oldSize = boundsByID[old]?.size
-                let new = candidates.first { candidate in
-                    guard let oldSize, let size = boundsByID[candidate]?.size else { return false }
+                let oldBounds = boundsByID[old]
+                // Tabs share their group's exact frame. A size-only match stands only for the app's
+                // single shown tab; with several, it can pick another group's tab.
+                let frameMatch = candidates.first { candidate in
+                    guard let oldBounds, let bounds = boundsByID[candidate] else { return false }
+                    return bounds.isNear(oldBounds)
+                }
+                let sizeMatch = shownTabs.count == 1 ? candidates.first { candidate in
+                    guard let oldSize = oldBounds?.size, let size = boundsByID[candidate]?.size else { return false }
                     return size.isNear(oldSize)
-                } ?? candidates.first
+                } : nil
+                let new = frameMatch ?? sizeMatch
 
                 if let new, let tab = nativeTabs[new] {
                     if swapTab(out: old, in: new, element: tab.element, pid: pid, focus: focus) {
                         placed.insert(new)
-                        hideCandidates.remove(old)
                         changed = true
                     }
                 } else if tiledIDs.contains(where: onScreen.contains) || pidsShowingWindows.contains(pid) {
-                    if confirmHides && hideCandidates.insert(old).inserted { continue }
+                    if confirmHides {
+                        let firstSeen = hideCandidates[old] ?? now
+                        hideCandidates[old] = firstSeen
+                        if now - firstSeen < tabConfirmMs { continue }
+                    }
                     // An ordered-out tab or window returns through events or a stray pass once shown again.
-                    hideCandidates.remove(old)
                     hideTab(old, pid: pid)
                     changed = true
                 }
@@ -99,14 +117,13 @@ extension WindowManager {
 
             for id in shownTabs where !placed.contains(id) {
                 guard let tab = nativeTabs[id] else { continue }
-                if strayTabs.contains(id) {
-                    dropNativeTab(id)
-                    if adopt(element: tab.element, pid: pid, activate: id == focus) {
-                        RibbonLog.log("native tab adopted as window wid=\(id) pid=\(pid)", category: "tabs")
-                        changed = true
-                    }
-                } else {
-                    strayTabs.insert(id)
+                let firstSeen = strayTabs[id] ?? now
+                strayTabs[id] = firstSeen
+                guard now - firstSeen >= tabConfirmMs else { continue }
+                dropNativeTab(id)
+                if adopt(element: tab.element, pid: pid, activate: id == focus) {
+                    RibbonLog.log("native tab adopted as window wid=\(id) pid=\(pid)", category: "tabs")
+                    changed = true
                 }
             }
         }
@@ -168,7 +185,17 @@ extension WindowManager {
             nativeTabs[id] = (element: element, pid: pid)
         }
         removeFromRibbon(id: id)
-        RibbonLog.log("native tab hidden wid=\(id) pid=\(pid)", category: "tabs")
+        RibbonLog.log("native tab hidden wid=\(id) pid=\(pid) spaces=\(SpaceManager.spaceIDs(for: id))", category: "tabs")
+    }
+
+    /// Holds a new window that opened at a tiled sibling's frame as a hidden tab; the reconcile
+    /// passes give it its group's slot once macOS orders the sibling out.
+    func holdTabCandidate(_ element: AXElement, id: CGWindowID, sibling: CGWindowID, pid: pid_t, focus: CGWindowID?) {
+        let frame = serverFrame(id).map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
+        RibbonLog.log("native tab candidate wid=\(id) sibling=\(sibling) frame=\(frame)", category: "tabs")
+        nativeTabs[id] = (element: element, pid: pid)
+        observer.observeWindow(element: element, pid: pid)
+        scheduleTabReconcile(pid: pid, focus: focus)
     }
 
     /// Reconciles the app's tabs once its tab switch or window creation has settled.
@@ -188,9 +215,7 @@ extension WindowManager {
         let ownID = cachedWindowID(for: element)
         let candidates = allRibbonWindows.filter { $0.pid == pid && $0.id != ownID }.map(\.id).sorted()
         return candidates.first { id in
-            guard let tiled = serverFrame(id) else { return false }
-            return abs(tiled.minX - frame.minX) <= 2 && abs(tiled.minY - frame.minY) <= 2
-                && tiled.size.isNear(frame.size)
+            serverFrame(id)?.isNear(frame) ?? false
         }
     }
 
@@ -201,7 +226,7 @@ extension WindowManager {
 
     func dropNativeTab(_ id: CGWindowID) {
         nativeTabs.removeValue(forKey: id)
-        strayTabs.remove(id)
+        strayTabs.removeValue(forKey: id)
     }
 }
 
@@ -209,5 +234,12 @@ extension CGSize {
     /// True when both dimensions differ from `other` by at most 2pt.
     func isNear(_ other: CGSize) -> Bool {
         abs(width - other.width) <= 2 && abs(height - other.height) <= 2
+    }
+}
+
+extension CGRect {
+    /// True when origin and size each differ from `other` by at most 2pt.
+    func isNear(_ other: CGRect) -> Bool {
+        abs(minX - other.minX) <= 2 && abs(minY - other.minY) <= 2 && size.isNear(other.size)
     }
 }
