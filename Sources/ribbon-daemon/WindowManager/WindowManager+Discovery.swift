@@ -10,7 +10,8 @@ extension WindowManager {
         guard win.role == (kAXWindowRole as String),
               win.subrole == (kAXStandardWindowSubrole as String),
               !win.isMinimized,
-              !win.isFullscreen else { return false }
+              !win.isFullscreen,
+              !config.floats(title: win.title) else { return false }
         return true
     }
 

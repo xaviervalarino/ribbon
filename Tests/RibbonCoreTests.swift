@@ -485,6 +485,10 @@ func runTests() {
     var flickStepper = SwipeStepper()
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.90, dy: 0, config: config), .focusRight, "Fast flick fires one step")
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), nil, "Excess travel past threshold is dropped")
+    // 16. Browser extension pop-outs float by title
+    TestRunner.assertTrue(Config().floats(title: "Extension: (Bitwarden Password Manager) - Bitwarden"), "Bitwarden pop-out floats")
+    TestRunner.assertTrue(Config().floats(title: "extension: (uBlock Origin)"), "Pattern matches case-insensitively")
+    TestRunner.assertFalse(Config().floats(title: "Bitwarden Web Vault - Zen"), "A browser tab titled Bitwarden still tiles")
 
     guard TestRunner.summary() else {
         exit(1)
