@@ -84,9 +84,9 @@ extension WindowManager: AXEventObserverDelegate {
         }
         guard let id = trackedWindowID(for: element) else { return }
 
-        // Closing a shown tab shows another tab of its group, which takes over the slot once shown.
+        // Closing a shown tab shows another tab of its group, which takes over the slot and its
+        // restore frame once shown.
         if holdClosedTabSlot(id, pid: pid) {
-            forgetOriginalFrame(id: id)
             return
         }
 
@@ -360,6 +360,7 @@ extension WindowManager: AXEventObserverDelegate {
         closedTabSlots = closedTabSlots.filter { $0.value.pid != pid }
         let matchingIDs = Set(allRibbonWindows.filter { $0.pid == pid }.map { $0.id })
         for id in matchingIDs {
+            hideCandidates.removeValue(forKey: id)
             trackedWindows.removeValue(forKey: id)
             lastAppliedFrames.removeValue(forKey: id)
             lastStashedState.removeValue(forKey: id)

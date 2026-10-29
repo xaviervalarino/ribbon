@@ -14,8 +14,8 @@ extension WindowManager {
     /// without a slot before it is adopted. A tab switch settles well inside it.
     var tabConfirmMs: Double { 500 }
 
-    /// How long a new window of the frontmost app waits untiled for a sibling tab to order out.
-    var newTabWaitMs: Double { 300 }
+    /// How long a closed tab's slot waits for its group's next tab to show.
+    var closedTabHoldMs: Double { 300 }
 
     /// Swaps each tiled window of `pids` that is ordered out for its group's shown tab, hides an
     /// ordered-out window while its app shows another window, and adopts a hidden tab shown
@@ -30,6 +30,15 @@ extension WindowManager {
         windowList precomputedList: [NSDictionary]? = nil
     ) {
         guard !isDisplayReconfiguring, !pids.isEmpty else { return }
+        // A swap mid-slide leaves the old window's track writing its frame, which drags the group.
+        if scrollAnimator.isActive {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
+                guard let self, !self.isStopped else { return }
+                let current = pids.lazy.compactMap { self.stillFocused(focus, pid: $0) }.first
+                self.reconcileNativeTabs(pids: pids, focus: current, confirmHides: confirmHides)
+            }
+            return
+        }
         guard let windowList = precomputedList
                 ?? CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [NSDictionary],
               let onScreen = onScreenWindowIDs() else { return }
@@ -138,6 +147,8 @@ extension WindowManager {
 
     /// Hands `old`'s ribbon slot to the tab `new` and moves `old` into `nativeTabs`. Tracks `new`
     /// directly: `upsertWindow` re-derives the space and can move the window to another ribbon.
+    /// The slot's restore frame and minimum height move to `new`; `new`'s current frame is the
+    /// tiled one, not its original.
     @discardableResult
     func swapTab(out old: CGWindowID, in new: CGWindowID, element: AXElement, pid: pid_t, focus: CGWindowID? = nil) -> Bool {
         let slotSID = spaceByWindowID[old] ?? ribbons.first(where: { entry in
@@ -147,13 +158,14 @@ extension WindowManager {
 
         let oldModel = r.columns.lazy.flatMap(\.windows).first { $0.id == old }
         let app = NSRunningApplication(processIdentifier: pid)
-        let model = WindowModel(
+        var model = WindowModel(
             id: new,
             pid: pid,
             bundleId: app?.bundleIdentifier ?? oldModel?.bundleId,
             title: element.title,
             appName: app?.localizedName ?? oldModel?.appName ?? ""
         )
+        model.minHeight = oldModel?.minHeight
         guard r.replaceWindow(id: old, with: model) else { return false }
         if new == focus {
             r.focus(windowID: new)
@@ -174,7 +186,12 @@ extension WindowManager {
         if let dID {
             displayByWindowID[new] = dID
         }
-        rememberOriginalFrame(id: new, element: element)
+        if let frame = originalFrames.removeValue(forKey: old) {
+            originalFrames[new] = frame
+            persistOriginalFrames()
+        } else {
+            rememberOriginalFrame(id: new, element: element)
+        }
         observer.observeWindow(element: element, pid: pid)
         adoptedSinceLastSweep.insert(new)
 
@@ -201,12 +218,15 @@ extension WindowManager {
         scheduleTabReconcile(pid: pid, focus: focus)
     }
 
-    /// Keeps a closed tab's slot until its group's next tab shows, for up to `newTabWaitMs`, and
+    /// Keeps a closed tab's slot until its group's next tab shows, for up to `closedTabHoldMs`, and
     /// returns false when no hidden tab shares the slot's x and width (the group had one tab). The
     /// slot has no element meanwhile, so retiles skip it: the next tab may still be ordered out, and
-    /// a frame written to a hidden tab moves its group.
+    /// a frame written to a hidden tab moves its group. Focus and manual moves evict
+    /// `lastAppliedFrames`; the slot's strip frame stands in unless the slot is stashed, where the
+    /// group sits at its stash instead.
     func holdClosedTabSlot(_ id: CGWindowID, pid: pid_t) -> Bool {
-        guard let frame = lastAppliedFrames[id] else { return false }
+        let stripFrame = lastStashedState[id] == true ? nil : lastNaturalFrames[id]
+        guard let frame = lastAppliedFrames[id] ?? stripFrame else { return false }
         let frames = serverFrames(pid: pid)
         guard nativeTabIDs(pid: pid).contains(where: { frames[$0]?.isSameColumn(frame) ?? false }) else { return false }
         if let element = trackedWindows.removeValue(forKey: id) {
@@ -258,49 +278,45 @@ extension WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
             guard let self, !self.isStopped, let held = self.closedTabSlots[id] else { return }
             if self.fillClosedTabSlot(id, shown: nil) { return }
-            guard CACurrentMediaTime() * 1000 - held.sinceMs >= self.newTabWaitMs else {
+            guard CACurrentMediaTime() * 1000 - held.sinceMs >= self.closedTabHoldMs else {
                 self.pollClosedTabSlot(id)
                 return
             }
             self.closedTabSlots.removeValue(forKey: id)
             self.removeFromRibbon(id: id)
+            self.forgetOriginalFrame(id: id)
             self.scheduleRetile()
             self.scheduleTabReconcile(pid: held.pid)
         }
     }
 
-    /// Reconciles the app's tabs once its tab switch or window creation has settled.
+    /// Reconciles the app's tabs once its tab switch or window creation has settled. Each pass
+    /// focuses `focus` only while it is still its active app's front window.
     func scheduleTabReconcile(pid: pid_t, focus: CGWindowID? = nil) {
         for ms in [100, 300, 800] {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(ms)) { [weak self] in
                 guard let self, !self.isStopped else { return }
-                self.reconcileNativeTabs(pids: [pid], focus: focus)
+                self.reconcileNativeTabs(pids: [pid], focus: self.stillFocused(focus, pid: pid))
             }
         }
     }
 
+    /// `focus` while its app is active and it is the app's front window, else nil. A delayed pass
+    /// passes its captured focus through this, so a click or cmd-tab since then keeps its focus.
+    func stillFocused(_ focus: CGWindowID?, pid: pid_t) -> CGWindowID? {
+        guard let focus, NSRunningApplication(processIdentifier: pid)?.isActive == true,
+              frontmostWindowID(pid: pid) == focus else { return nil }
+        return focus
+    }
+
     /// Gives a new window its group's slot when it is a native tab: at once when the sibling has
-    /// ordered out, else held until the reconcile sees it do so. A new window of the frontmost app
-    /// waits untiled for up to `newTabWaitMs`, since the shown tab orders out shortly after its new
-    /// tab is created. False for an ordinary window, which the caller adopts.
+    /// ordered out, else held until the reconcile sees it do so. False for an ordinary window,
+    /// which the caller adopts.
     func claimNewTab(_ element: AXElement, id: CGWindowID, pid: pid_t, focus: CGWindowID?) -> Bool {
         // A tab its focus event already claimed holds a slot; claiming it again would move it.
-        guard trackedWindows[id] == nil, nativeTabs[id] == nil else { return false }
-        if pendingNewWindows[id] != nil { return true }
-        if let sibling = tabSibling(of: id, pid: pid) {
-            settleNewTab(element, id: id, sibling: sibling, pid: pid, focus: focus)
-            return true
-        }
-        guard focus != nil, allRibbonWindows.contains(where: { $0.pid == pid }) else { return false }
-        pendingNewWindows[id] = (element: element, pid: pid, focus: focus, sinceMs: CACurrentMediaTime() * 1000)
-        let format = { (r: CGRect) in "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))" }
-        let frames = serverFrames(pid: pid)
-        let onScreen = onScreenWindowIDs() ?? []
-        let tiled = allRibbonWindows.filter { $0.pid == pid }.map {
-            "\($0.id):\(frames[$0.id].map(format) ?? "none")\(onScreen.contains($0.id) ? "" : " out")"
-        }
-        RibbonLog.log("new window wid=\(id) frame=\(frames[id].map(format) ?? "none") waits; app tiles [\(tiled.joined(separator: ", "))]", category: "tabs")
-        pollNewWindow(id)
+        guard trackedWindows[id] == nil, nativeTabs[id] == nil,
+              let sibling = tabSibling(of: id, pid: pid) else { return false }
+        settleNewTab(element, id: id, sibling: sibling, pid: pid, focus: focus)
         return true
     }
 
@@ -313,46 +329,13 @@ extension WindowManager {
         }
     }
 
-    /// Checks a waiting new window every 25ms: a sibling ordering out makes it a tab; at the end of
-    /// the wait it is adopted as an ordinary window.
-    private func pollNewWindow(_ id: CGWindowID) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
-            guard let self, !self.isStopped, let pending = self.pendingNewWindows[id] else { return }
-            let waitedMs = Int(CACurrentMediaTime() * 1000 - pending.sinceMs)
-            // Another path adopted it meanwhile; its own slot stands.
-            if self.trackedWindows[id] != nil || self.nativeTabs[id] != nil {
-                self.pendingNewWindows.removeValue(forKey: id)
-                return
-            }
-            if let sibling = self.tabSibling(of: id, pid: pending.pid) {
-                self.pendingNewWindows.removeValue(forKey: id)
-                RibbonLog.log("native tab wid=\(id) sibling=\(sibling.id) orderedOut=\(sibling.orderedOut) after \(waitedMs)ms", category: "tabs")
-                self.settleNewTab(pending.element, id: id, sibling: sibling, pid: pending.pid, focus: pending.focus)
-                return
-            }
-            guard Double(waitedMs) >= self.newTabWaitMs else {
-                self.pollNewWindow(id)
-                return
-            }
-            self.pendingNewWindows.removeValue(forKey: id)
-            RibbonLog.log("new window wid=\(id) pid=\(pending.pid) is not a tab after \(waitedMs)ms", category: "tabs")
-            // A click or cmd-tab during the wait moved focus elsewhere; the window then tiles unfocused.
-            let stillFocused = pending.focus != nil
-                && NSRunningApplication(processIdentifier: pending.pid)?.isActive == true
-                && self.frontmostWindowID(pid: pending.pid) == id
-            if self.adopt(element: pending.element, pid: pending.pid, activate: stillFocused) {
-                self.scheduleRetile()
-            }
-            self.scheduleTabReconcile(pid: pending.pid)
-        }
-    }
-
     /// The tiled window that new window `id` is a tab of. Showing a new tab orders its group's shown
     /// tab out, so an app's tiled window ordered out on a visible space at the new window's origin
-    /// and width is the sibling, swapped at once (`orderedOut`). A lone ordered-out
-    /// window at another frame, or a tiled window at the same frame within 2pt, makes the new window
-    /// a candidate that the reconcile settles; Ribbon writes nothing to it meanwhile. Otherwise the
-    /// window is ordinary: macOS cascades a genuine new window to a different origin.
+    /// and width is the sibling, swapped at once (`orderedOut`). A lone ordered-out window of the
+    /// new window's size at another origin, or a tiled window at the same frame within 2pt, makes
+    /// the new window a candidate that the reconcile settles; Ribbon writes nothing to it
+    /// meanwhile. Otherwise the window is ordinary: macOS cascades a genuine new window to a
+    /// different origin.
     func tabSibling(of id: CGWindowID, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
         let tiled = Set(allRibbonWindows.filter { $0.pid == pid && $0.id != id }.map(\.id)).sorted()
         guard !tiled.isEmpty, let onScreen = onScreenWindowIDs() else { return nil }
@@ -373,7 +356,7 @@ extension WindowManager {
         if let frame, let match = orderedOut.first(where: { $0.frame.isSameColumn(frame) }) {
             return (match.id, true)
         }
-        if orderedOut.count == 1 {
+        if orderedOut.count == 1, let frame, orderedOut[0].frame.size.isNear(frame.size) {
             return (orderedOut[0].id, false)
         }
         if let frame, let match = tiled.first(where: { frames[$0]?.isNear(frame) ?? false }) {

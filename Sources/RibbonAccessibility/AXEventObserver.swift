@@ -275,6 +275,7 @@ public final class AXEventObserver {
             kAXWindowDeminiaturizedNotification
         ]
 
+        var observesCreation = true
         for notif in notifications {
             let result = AXObserverAddNotification(obs, appElement, notif as CFString, refcon)
             // A just-launched app answers cannotComplete until its AX is up; an observer without
@@ -283,6 +284,7 @@ public final class AXEventObserver {
             if result != .success, notif == kAXWindowCreatedNotification {
                 RibbonLog.log("AX observe failed pid=\(pid) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
                 failedObservePids.insert(pid)
+                observesCreation = false
                 if attempt < Self.retryDelays.count {
                     retryLater()
                     return
@@ -293,7 +295,12 @@ public final class AXEventObserver {
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         observers[pid] = obs
         if failedObservePids.remove(pid) != nil {
-            RibbonLog.log("AX observe succeeded late pid=\(pid) attempt=\(attempt)", category: "discovery")
+            if observesCreation {
+                RibbonLog.log("AX observe succeeded late pid=\(pid) attempt=\(attempt)", category: "discovery")
+            } else {
+                RibbonLog.log("AX observe kept without window creation pid=\(pid) attempts=\(attempt + 1)", category: "discovery")
+            }
+            // Without window creation, the sweep is the only way the app's existing windows join.
             // Callers include discovery and tiling loops, so the sweep runs on a later turn, held
             // like other app events while a slide runs.
             DispatchQueue.main.async { [weak self] in

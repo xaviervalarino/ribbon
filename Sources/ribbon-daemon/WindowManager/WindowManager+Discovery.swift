@@ -81,7 +81,7 @@ extension WindowManager {
 
     func discoverExistingWindows() {
         reconcileWindows(sortHorizontally: true)
-        // Hidden tabs are live windows, so discovery tiles them; collapse each group into one slot.
+        // A hidden tab that reports a space is tiled by discovery; collapse each group into one slot.
         reconcileNativeTabs(pids: Set(allRibbonWindows.map(\.pid)), confirmHides: false)
         syncFocusToFrontmostWindow()
         retile(allSpaces: true)
@@ -107,6 +107,8 @@ extension WindowManager {
             }
         }
 
+        let onScreen = onScreenWindowIDs()
+
         var discovered: [(
             win: AXElement,
             id: CGWindowID,
@@ -125,8 +127,16 @@ extension WindowManager {
 
             let appElem = AXElement.application(pid: app.processIdentifier)
             for win in appElem.windows {
-                guard admits(win), let id = win.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { continue }
+                guard admits(win), let id = win.windowID, nativeTabs[id] == nil else { continue }
                 if !allLiveIDs.isEmpty && !allLiveIDs.contains(id) { continue }
+                // A hidden native tab is ordered out and reports no space; it joins only through its
+                // group's slot or the stray pass.
+                if let onScreen, !onScreen.contains(id), SpaceManager.spaceIDs(for: id).isEmpty {
+                    if trackedWindows[id] == nil {
+                        nativeTabs[id] = (element: win, pid: app.processIdentifier)
+                    }
+                    continue
+                }
 
                 let frame = win.frame ?? .zero
                 if originalFrames[id] == nil, frame.width > 50 && frame.height > 50 {
@@ -296,9 +306,8 @@ extension WindowManager {
               let appName = app.localizedName,
               !config.ignoredApps.contains(appName) else { return false }
         guard admits(element) else { return false }
-        // A hidden tab joins only through its group's slot (reconcileNativeTabs), and a new window
-        // waiting to learn whether it is a tab only through its wait (claimNewTab).
-        guard let id = element.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { return false }
+        // A hidden tab joins only through its group's slot (reconcileNativeTabs).
+        guard let id = element.windowID, nativeTabs[id] == nil else { return false }
 
         rememberOriginalFrame(id: id, element: element)
 

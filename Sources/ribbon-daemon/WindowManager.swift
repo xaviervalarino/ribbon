@@ -97,8 +97,6 @@ public final class WindowManager {
     /// Tiled windows ordered out, by first-sighting time in ms; one ordered out for
     /// `tabConfirmMs` is hidden.
     var hideCandidates: [CGWindowID: Double] = [:]
-    /// New windows of the frontmost app waiting untiled to learn whether they are tabs.
-    var pendingNewWindows: [CGWindowID: (element: AXElement, pid: pid_t, focus: CGWindowID?, sinceMs: Double)] = [:]
     /// Slots of closed shown tabs, kept untracked until the group's next tab shows.
     var closedTabSlots: [CGWindowID: (pid: pid_t, frame: CGRect, sinceMs: Double)] = [:]
     var gcTimer: DispatchSourceTimer?
@@ -115,6 +113,7 @@ public final class WindowManager {
     private var lastSampledDisplaySnapshot: DisplaySnapshot?
     private var screenParametersObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
+    private var screensWakeObserver: NSObjectProtocol?
     var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     var lastStashedState: [CGWindowID: Bool] = [:]
     var lastNaturalFrames: [CGWindowID: CGRect] = [:]
@@ -258,6 +257,15 @@ public final class WindowManager {
             self?.displayConfigurationChanged()
         }
 
+        // A display link stops ticking while its display sleeps; waking it posts no reconfiguration.
+        screensWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scrollAnimator.displaysChanged()
+        }
+
         retileNow()
     }
 
@@ -347,6 +355,10 @@ public final class WindowManager {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             wakeObserver = nil
         }
+        if let obs = screensWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+            screensWakeObserver = nil
+        }
         observer.stop()
 
         if !forRestart {
@@ -374,7 +386,6 @@ public final class WindowManager {
         nativeTabs.removeAll()
         strayTabs.removeAll()
         hideCandidates.removeAll()
-        pendingNewWindows.removeAll()
         closedTabSlots.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(

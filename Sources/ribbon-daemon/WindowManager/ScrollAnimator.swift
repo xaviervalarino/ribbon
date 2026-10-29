@@ -78,6 +78,8 @@ final class ScrollAnimator: @unchecked Sendable {
     private static let frameMs = 1000.0 / 120.0
     /// How long a running display link may go without a frame before the timer replaces it.
     private static let deadLinkMs = 250
+    /// How late a link check may run before it counts as a main-thread stall rather than a check.
+    private static let stalledCheckMs = 50.0
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
@@ -231,9 +233,16 @@ final class ScrollAnimator: @unchecked Sendable {
 
     /// Checks the running link every `deadLinkMs` until the slide ends. A link silent that long
     /// belongs to a display that is gone or asleep; slides use the timer until displays change.
+    /// A check that runs late means the main thread stalled, which holds the link's frames too, so
+    /// it checks again instead of judging the link.
     private func watchLink(resume: Int, since startMs: Double) {
+        let dueMs = Self.nowMs() + Double(Self.deadLinkMs)
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.deadLinkMs)) { [weak self] in
             guard let self, resume == self.linkResumes, self.isActive, self.displayLink != nil else { return }
+            guard Self.nowMs() - dueMs <= Self.stalledCheckMs else {
+                self.watchLink(resume: resume, since: startMs)
+                return
+            }
             let silentMs = Self.nowMs() - (self.lastTickMs ?? startMs)
             guard silentMs >= Double(Self.deadLinkMs) else {
                 self.watchLink(resume: resume, since: startMs)
