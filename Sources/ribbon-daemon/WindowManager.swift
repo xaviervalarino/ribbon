@@ -97,6 +97,8 @@ public final class WindowManager {
     /// Tiled windows ordered out, by first-sighting time in ms; one ordered out for
     /// `tabConfirmMs` is hidden.
     var hideCandidates: [CGWindowID: Double] = [:]
+    /// New windows of the frontmost app waiting untiled to learn whether they are tabs.
+    var pendingNewWindows: [CGWindowID: (element: AXElement, pid: pid_t, focus: CGWindowID?, sinceMs: Double)] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?
@@ -370,6 +372,7 @@ public final class WindowManager {
         nativeTabs.removeAll()
         strayTabs.removeAll()
         hideCandidates.removeAll()
+        pendingNewWindows.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,

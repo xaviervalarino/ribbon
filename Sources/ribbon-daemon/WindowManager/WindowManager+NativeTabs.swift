@@ -14,6 +14,9 @@ extension WindowManager {
     /// without a slot before it is adopted. A tab switch settles well inside it.
     var tabConfirmMs: Double { 500 }
 
+    /// How long a new window of the frontmost app waits untiled for a sibling tab to order out.
+    var newTabWaitMs: Double { 300 }
+
     /// Swaps each tiled window of `pids` that is ordered out for its group's shown tab, hides an
     /// ordered-out window while its app shows another window, and adopts a hidden tab shown
     /// without a slot. Hiding and adopting wait until the state has held for `tabConfirmMs`;
@@ -209,17 +212,58 @@ extension WindowManager {
     }
 
     /// Gives a new window its group's slot when it is a native tab: at once when the sibling has
-    /// ordered out, else held until the reconcile sees it do so. False for an ordinary window.
+    /// ordered out, else held until the reconcile sees it do so. A new window of the frontmost app
+    /// waits untiled for up to `newTabWaitMs`, since the shown tab orders out shortly after its new
+    /// tab is created. False for an ordinary window, which the caller adopts.
     func claimNewTab(_ element: AXElement, id: CGWindowID, pid: pid_t, focus: CGWindowID?) -> Bool {
         // A tab its focus event already claimed holds a slot; claiming it again would move it.
-        guard trackedWindows[id] == nil, let sibling = tabSibling(of: element, id: id, pid: pid) else { return false }
+        guard trackedWindows[id] == nil, nativeTabs[id] == nil else { return false }
+        if pendingNewWindows[id] != nil { return true }
+        if let sibling = tabSibling(of: element, id: id, pid: pid) {
+            settleNewTab(element, id: id, sibling: sibling, pid: pid, focus: focus)
+            return true
+        }
+        guard focus != nil, allRibbonWindows.contains(where: { $0.pid == pid }) else { return false }
+        pendingNewWindows[id] = (element: element, pid: pid, focus: focus, sinceMs: CACurrentMediaTime() * 1000)
+        let format = { (r: CGRect) in "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))" }
+        let tiled = allRibbonWindows.filter { $0.pid == pid }.map { "\($0.id):\(serverFrame($0.id).map(format) ?? "none")" }
+        RibbonLog.log("new window wid=\(id) frame=\(element.frame.map(format) ?? "none") waits; app tiles [\(tiled.joined(separator: ", "))]", category: "tabs")
+        pollNewWindow(id)
+        return true
+    }
+
+    private func settleNewTab(_ element: AXElement, id: CGWindowID, sibling: (id: CGWindowID, orderedOut: Bool), pid: pid_t, focus: CGWindowID?) {
         if sibling.orderedOut, swapTab(out: sibling.id, in: id, element: element, pid: pid, focus: focus) {
             scheduleTabReconcile(pid: pid)
             scheduleRetile()
         } else {
             holdTabCandidate(element, id: id, sibling: sibling.id, pid: pid, focus: focus)
         }
-        return true
+    }
+
+    /// Checks a waiting new window every 25ms: a sibling ordering out makes it a tab; at the end of
+    /// the wait it is adopted as an ordinary window.
+    private func pollNewWindow(_ id: CGWindowID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
+            guard let self, !self.isStopped, let pending = self.pendingNewWindows[id] else { return }
+            let waitedMs = Int(CACurrentMediaTime() * 1000 - pending.sinceMs)
+            if let sibling = self.tabSibling(of: pending.element, id: id, pid: pending.pid) {
+                self.pendingNewWindows.removeValue(forKey: id)
+                RibbonLog.log("native tab wid=\(id) sibling=\(sibling.id) orderedOut=\(sibling.orderedOut) after \(waitedMs)ms", category: "tabs")
+                self.settleNewTab(pending.element, id: id, sibling: sibling, pid: pending.pid, focus: pending.focus)
+                return
+            }
+            guard Double(waitedMs) >= self.newTabWaitMs else {
+                self.pollNewWindow(id)
+                return
+            }
+            self.pendingNewWindows.removeValue(forKey: id)
+            RibbonLog.log("new window wid=\(id) pid=\(pending.pid) is not a tab after \(waitedMs)ms", category: "tabs")
+            if self.adopt(element: pending.element, pid: pending.pid, activate: pending.focus != nil) {
+                self.scheduleRetile()
+            }
+            self.scheduleTabReconcile(pid: pending.pid)
+        }
     }
 
     /// The tiled window that new window `id` is a tab of. A new tab orders its group's shown tab
