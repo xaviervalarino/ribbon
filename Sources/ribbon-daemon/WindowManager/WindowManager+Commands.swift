@@ -297,11 +297,18 @@ extension WindowManager {
             guard parts.count == 2 else { return "error: usage: pan begin|end" }
             switch parts[1].lowercased() {
             case "begin":
+                // Each command is its own CLI process, so a quick tap's `pan end` can overtake its
+                // `pan begin`; a begin right after an end that found no hold is that stale press.
+                if let orphan = orphanPanEndAt, DispatchTime.now() < orphan + .milliseconds(250) {
+                    orphanPanEndAt = nil
+                    return "ok"
+                }
                 panHeld = true
                 panHeldSince = .now()
                 panController.resetIfIdle()
                 inputTap.setPointerMonitoring(true)
             case "end":
+                orphanPanEndAt = panHeld ? nil : .now()
                 panHeld = false
                 panHeldSince = nil
                 inputTap.setPointerMonitoring(false)

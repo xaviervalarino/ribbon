@@ -2,8 +2,9 @@ import Foundation
 import AppKit
 import CoreGraphics
 
-/// Pans the active Space's strip horizontally while a pan is held (`pan begin` to `pan end`), flushing position
-/// updates at most every 8ms and snapping to the most visible column when the hold ends.
+/// Pans the active Space's strip horizontally while a pan is held (`pan begin` to `pan end`),
+/// flushing position updates at most every 8ms and snapping to the column
+/// `LayoutEngine.panSnapColumn` picks when the hold ends.
 final class PanController {
     /// Pointer travel below this many points pans nothing, so key chords with a resting hand stay still.
     private static let deadZone: Double = 40
