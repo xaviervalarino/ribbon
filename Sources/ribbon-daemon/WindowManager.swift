@@ -100,7 +100,7 @@ public final class WindowManager {
     /// New windows of the frontmost app waiting untiled to learn whether they are tabs.
     var pendingNewWindows: [CGWindowID: (element: AXElement, pid: pid_t, focus: CGWindowID?, sinceMs: Double)] = [:]
     /// Slots of closed shown tabs, kept untracked until the group's next tab shows.
-    var closedTabSlots: [CGWindowID: (pid: pid_t, sinceMs: Double)] = [:]
+    var closedTabSlots: [CGWindowID: (pid: pid_t, frame: CGRect, sinceMs: Double)] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?
