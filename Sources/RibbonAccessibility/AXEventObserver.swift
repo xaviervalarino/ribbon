@@ -119,8 +119,9 @@ public final class AXEventObserver {
     }
 
     @objc private func handleAppLaunched(_ notification: Notification) {
-        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
-              app.activationPolicy == .regular else { return }
+        guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        RibbonLog.log("app launched pid=\(app.processIdentifier) policy=\(app.activationPolicy.rawValue)", category: "discovery")
+        guard app.activationPolicy == .regular else { return }
         observeApplication(pid: app.processIdentifier)
     }
 
@@ -135,6 +136,10 @@ public final class AXEventObserver {
     @objc private func handleAppActivated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         let pid = app.processIdentifier
+        // An app can launch before its activation policy turns regular, so the launch skipped it.
+        if app.activationPolicy == .regular {
+            observeApplication(pid: pid)
+        }
         runOrDefer(key: "didActivateApplication", label: "didActivateApplication", pid: pid) { [weak self] in
             self?.delegate?.applicationActivated(pid: pid)
         }
