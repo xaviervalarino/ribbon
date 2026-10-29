@@ -7,7 +7,18 @@ import CoreGraphics
 //
 // Each macOS native tab is its own window. Only the selected tab is ordered in, and every tab of
 // a group shares the group's frame, so writing a frame to any tab moves the whole group. A group
-// holds one ribbon slot, owned by its shown tab; hidden tabs live in `nativeTabs`.
+// holds one ribbon slot, owned by its shown tab; hidden tabs live in `tabStates`.
+
+/// Native-tab bookkeeping per window; a window has at most one state.
+enum TabState {
+    /// Ordered-out tab outside every ribbon and `trackedWindows`. `shownSinceMs` is set while it is
+    /// on screen without a slot (a stray), from its first sighting.
+    case hidden(element: AXElement, pid: pid_t, shownSinceMs: Double?)
+    /// Tiled window seen ordered out since `sinceMs`; hidden once that holds for `tabConfirmMs`.
+    case orderedOut(sinceMs: Double)
+    /// Slot of a closed shown tab, held untracked until a tab of its group shows.
+    case closedSlot(pid: pid_t, frame: CGRect, sinceMs: Double)
+}
 
 extension WindowManager {
     /// How long a window stays ordered out before it is hidden, or a hidden tab stays shown
@@ -69,8 +80,8 @@ extension WindowManager {
         for pid in pids.sorted() {
             guard let app = NSRunningApplication(processIdentifier: pid), !app.isHidden else { continue }
 
-            for id in nativeTabIDs(pid: pid) where !liveIDs.contains(id) {
-                dropNativeTab(id)
+            for id in hiddenTabIDs(pid: pid) where !liveIDs.contains(id) {
+                dropTabState(id)
             }
 
             let tiledIDs = allRibbonWindows.filter { $0.pid == pid }.map(\.id)
@@ -81,17 +92,20 @@ extension WindowManager {
                 let spaces = SpaceManager.spaceIDs(for: id)
                 return spaces.isEmpty || spaces.contains(where: visibleSpaces.contains)
             }.sorted()
-            let pidTabs = nativeTabIDs(pid: pid)
+            let pidTabs = hiddenTabIDs(pid: pid)
             let shownTabs = pidTabs.filter(onScreen.contains)
 
             // A stray tab hidden again starts over.
             for id in pidTabs where !onScreen.contains(id) {
-                strayTabs.removeValue(forKey: id)
+                if case let .hidden(element, tabPID, _?) = tabStates[id] {
+                    tabStates[id] = .hidden(element: element, pid: tabPID, shownSinceMs: nil)
+                }
             }
 
             // An ordered-out window starts over when it shows again or dies.
-            hideCandidates = hideCandidates.filter { entry in
-                liveIDs.contains(entry.key) && (!tiledIDs.contains(entry.key) || offTiled.contains(entry.key))
+            tabStates = tabStates.filter { id, state in
+                guard case .orderedOut = state else { return true }
+                return liveIDs.contains(id) && (!tiledIDs.contains(id) || offTiled.contains(id))
             }
 
             var placed = Set<CGWindowID>()
@@ -110,15 +124,20 @@ extension WindowManager {
                 } : nil
                 let new = frameMatch ?? sizeMatch
 
-                if let new, let tab = nativeTabs[new] {
+                if let new, let tab = hiddenTab(new) {
                     if swapTab(out: old, in: new, element: tab.element, pid: pid, focus: focus) {
                         placed.insert(new)
                         changed = true
                     }
                 } else if tiledIDs.contains(where: onScreen.contains) || pidsShowingWindows.contains(pid) {
                     if confirmHides {
-                        let firstSeen = hideCandidates[old] ?? now
-                        hideCandidates[old] = firstSeen
+                        let firstSeen: Double
+                        if case let .orderedOut(sinceMs) = tabStates[old] {
+                            firstSeen = sinceMs
+                        } else {
+                            firstSeen = now
+                            tabStates[old] = .orderedOut(sinceMs: now)
+                        }
                         if now - firstSeen < tabConfirmMs { continue }
                     }
                     // An ordered-out tab or window returns through events or a stray pass once shown again.
@@ -128,12 +147,14 @@ extension WindowManager {
             }
 
             for id in shownTabs where !placed.contains(id) {
-                guard let tab = nativeTabs[id] else { continue }
-                let firstSeen = strayTabs[id] ?? now
-                strayTabs[id] = firstSeen
+                guard case let .hidden(element, _, shownSinceMs) = tabStates[id] else { continue }
+                let firstSeen = shownSinceMs ?? now
+                if shownSinceMs == nil {
+                    tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: firstSeen)
+                }
                 guard now - firstSeen >= tabConfirmMs else { continue }
-                dropNativeTab(id)
-                if adopt(element: tab.element, pid: pid, activate: id == focus) {
+                dropTabState(id)
+                if adopt(element: element, pid: pid, activate: id == focus) {
                     RibbonLog.log("native tab adopted as window wid=\(id) pid=\(pid)", category: "tabs")
                     changed = true
                 }
@@ -145,7 +166,7 @@ extension WindowManager {
         }
     }
 
-    /// Hands `old`'s ribbon slot to the tab `new` and moves `old` into `nativeTabs`. Tracks `new`
+    /// Hands `old`'s ribbon slot to the tab `new` and marks `old` as a hidden tab. Tracks `new`
     /// directly: `upsertWindow` re-derives the space and can move the window to another ribbon.
     /// The slot's restore frame and minimum height move to `new`; `new`'s current frame is the
     /// tiled one, not its original.
@@ -176,10 +197,10 @@ extension WindowManager {
         let dID = displayByWindowID[old]
         removeFromRibbon(id: old)
         if let oldElement {
-            nativeTabs[old] = (element: oldElement, pid: pid)
+            tabStates[old] = .hidden(element: oldElement, pid: pid, shownSinceMs: nil)
         }
 
-        dropNativeTab(new)
+        dropTabState(new)
         trackedWindows[new] = element
         windowIDsByElement[element.rawElement] = new
         spaceByWindowID[new] = sID
@@ -199,10 +220,10 @@ extension WindowManager {
         return true
     }
 
-    /// Drops an ordered-out window from its ribbon and keeps it in `nativeTabs` until it shows again.
+    /// Drops an ordered-out window from its ribbon and marks it as a hidden tab until it shows again.
     func hideTab(_ id: CGWindowID, pid: pid_t) {
         if let element = trackedWindows[id] {
-            nativeTabs[id] = (element: element, pid: pid)
+            tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: nil)
         }
         removeFromRibbon(id: id)
         RibbonLog.log("native tab hidden wid=\(id) pid=\(pid) spaces=\(SpaceManager.spaceIDs(for: id))", category: "tabs")
@@ -213,7 +234,7 @@ extension WindowManager {
     func holdTabCandidate(_ element: AXElement, id: CGWindowID, sibling: CGWindowID, pid: pid_t, focus: CGWindowID?) {
         let frame = serverFrame(id).map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
         RibbonLog.log("native tab candidate wid=\(id) sibling=\(sibling) frame=\(frame)", category: "tabs")
-        nativeTabs[id] = (element: element, pid: pid)
+        tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: nil)
         observer.observeWindow(element: element, pid: pid)
         scheduleTabReconcile(pid: pid, focus: focus)
     }
@@ -228,11 +249,11 @@ extension WindowManager {
         let stripFrame = lastStashedState[id] == true ? nil : lastNaturalFrames[id]
         guard let frame = lastAppliedFrames[id] ?? stripFrame else { return false }
         let frames = serverFrames(pid: pid)
-        guard nativeTabIDs(pid: pid).contains(where: { frames[$0]?.isSameColumn(frame) ?? false }) else { return false }
+        guard hiddenTabIDs(pid: pid).contains(where: { frames[$0]?.isSameColumn(frame) ?? false }) else { return false }
         if let element = trackedWindows.removeValue(forKey: id) {
             windowIDsByElement.removeValue(forKey: element.rawElement)
         }
-        closedTabSlots[id] = (pid: pid, frame: frame, sinceMs: CACurrentMediaTime() * 1000)
+        tabStates[id] = .closedSlot(pid: pid, frame: frame, sinceMs: CACurrentMediaTime() * 1000)
         if !fillClosedTabSlot(id, shown: nil) {
             pollClosedTabSlot(id)
         }
@@ -243,7 +264,10 @@ extension WindowManager {
     /// just took focus.
     func fillClosedTabSlot(pid: pid_t, shown: CGWindowID) {
         guard let shownFrame = serverFrames(pid: pid)[shown],
-              let slot = closedTabSlots.first(where: { $0.value.pid == pid && $0.value.frame.isSameColumn(shownFrame) })?.key
+              let slot = tabStates.first(where: {
+                  guard case let .closedSlot(slotPID, frame, _) = $0.value else { return false }
+                  return slotPID == pid && frame.isSameColumn(shownFrame)
+              })?.key
         else { return }
         fillClosedTabSlot(slot, shown: shown)
     }
@@ -252,19 +276,19 @@ extension WindowManager {
     /// while no tab of the group has shown.
     @discardableResult
     private func fillClosedTabSlot(_ slot: CGWindowID, shown: CGWindowID?) -> Bool {
-        guard let held = closedTabSlots[slot] else { return false }
+        guard let held = closedSlot(slot) else { return false }
         let candidate: CGWindowID?
         if let shown {
             candidate = shown
         } else {
             let onScreen = onScreenWindowIDs() ?? []
             let frames = serverFrames(pid: held.pid)
-            candidate = nativeTabIDs(pid: held.pid).first { id in
+            candidate = hiddenTabIDs(pid: held.pid).first { id in
                 onScreen.contains(id) && (frames[id]?.isSameColumn(held.frame) ?? false)
             }
         }
-        guard let new = candidate, let tab = nativeTabs[new] else { return false }
-        closedTabSlots.removeValue(forKey: slot)
+        guard let new = candidate, let tab = hiddenTab(new) else { return false }
+        dropTabState(slot)
         if swapTab(out: slot, in: new, element: tab.element, pid: held.pid, focus: shown) {
             scheduleTabReconcile(pid: held.pid)
         } else {
@@ -276,13 +300,13 @@ extension WindowManager {
 
     private func pollClosedTabSlot(_ id: CGWindowID) {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
-            guard let self, !self.isStopped, let held = self.closedTabSlots[id] else { return }
+            guard let self, !self.isStopped, let held = self.closedSlot(id) else { return }
             if self.fillClosedTabSlot(id, shown: nil) { return }
             guard CACurrentMediaTime() * 1000 - held.sinceMs >= self.closedTabHoldMs else {
                 self.pollClosedTabSlot(id)
                 return
             }
-            self.closedTabSlots.removeValue(forKey: id)
+            self.dropTabState(id)
             self.removeFromRibbon(id: id)
             self.forgetOriginalFrame(id: id)
             self.scheduleRetile()
@@ -314,7 +338,7 @@ extension WindowManager {
     /// which the caller adopts.
     func claimNewTab(_ element: AXElement, id: CGWindowID, pid: pid_t, focus: CGWindowID?) -> Bool {
         // A tab its focus event already claimed holds a slot; claiming it again would move it.
-        guard trackedWindows[id] == nil, nativeTabs[id] == nil,
+        guard trackedWindows[id] == nil, !isHiddenTab(id),
               let sibling = tabSibling(of: id, pid: pid) else { return false }
         settleNewTab(element, id: id, sibling: sibling, pid: pid, focus: focus)
         return true
@@ -371,14 +395,38 @@ extension WindowManager {
         return nil
     }
 
-    /// The pid's hidden tabs in ascending window ID order.
-    func nativeTabIDs(pid: pid_t) -> [CGWindowID] {
-        nativeTabs.filter { $0.value.pid == pid }.keys.sorted()
+    func hiddenTab(_ id: CGWindowID) -> (element: AXElement, pid: pid_t)? {
+        guard case let .hidden(element, pid, _) = tabStates[id] else { return nil }
+        return (element, pid)
     }
 
-    func dropNativeTab(_ id: CGWindowID) {
-        nativeTabs.removeValue(forKey: id)
-        strayTabs.removeValue(forKey: id)
+    func isHiddenTab(_ id: CGWindowID) -> Bool {
+        if case .hidden = tabStates[id] { return true }
+        return false
+    }
+
+    func hiddenTabID(for element: AXElement) -> CGWindowID? {
+        tabStates.first { _, state in
+            guard case let .hidden(tabElement, _, _) = state else { return false }
+            return CFEqual(tabElement.rawElement, element.rawElement)
+        }?.key
+    }
+
+    /// The pid's hidden tabs in ascending window ID order.
+    func hiddenTabIDs(pid: pid_t) -> [CGWindowID] {
+        tabStates.compactMap { id, state in
+            guard case let .hidden(_, tabPID, _) = state, tabPID == pid else { return nil }
+            return id
+        }.sorted()
+    }
+
+    func closedSlot(_ id: CGWindowID) -> (pid: pid_t, frame: CGRect, sinceMs: Double)? {
+        guard case let .closedSlot(pid, frame, sinceMs) = tabStates[id] else { return nil }
+        return (pid, frame, sinceMs)
+    }
+
+    func dropTabState(_ id: CGWindowID) {
+        tabStates.removeValue(forKey: id)
     }
 }
 
