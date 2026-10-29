@@ -92,6 +92,7 @@ public final class WindowManager {
     var tabStates: [CGWindowID: TabState] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
+    var retileAnimated = false
     var resizeDebounceWork: DispatchWorkItem?
     var isDisplayReconfiguring: Bool = false
     var displaySamplingTimer: DispatchSourceTimer?
@@ -334,6 +335,7 @@ public final class WindowManager {
         gcTimer = nil
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
         displaySamplingTimer?.cancel()
@@ -399,6 +401,7 @@ public final class WindowManager {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
         scrollAnimator.displaysChanged()
     }
 
@@ -406,6 +409,7 @@ public final class WindowManager {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
         scrollAnimator.displaysChanged()
 
         displaySamplingCount = 0
