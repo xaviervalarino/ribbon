@@ -424,6 +424,7 @@ public final class WindowManager {
         retileWork?.cancel()
         retileWork = nil
         retileAnimated = false
+        scrollAnimator.displaysChanged()
     }
 
     func displayConfigurationChanged() {
@@ -431,6 +432,7 @@ public final class WindowManager {
         retileWork?.cancel()
         retileWork = nil
         retileAnimated = false
+        scrollAnimator.displaysChanged()
 
         displaySamplingCount = 0
         lastSampledDisplaySnapshot = nil
