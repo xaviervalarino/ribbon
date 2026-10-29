@@ -31,6 +31,8 @@ public final class AXEventObserver {
     private var observers: [pid_t: AXObserver] = [:]
     private var pendingWindowRegistrations: [pid_t: [AXElement]] = [:]
     private var pendingRetryPids: Set<pid_t> = []
+    /// Apps whose observation failed at least once; windows they create before it succeeds send nothing.
+    private var failedObservePids: Set<pid_t> = []
     private var isRunning: Bool = false
     private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0]
     /// Returns true while main-thread handlers must wait (a scroll slide is running): their AX
@@ -119,6 +121,7 @@ public final class AXEventObserver {
         observers.removeAll()
         pendingWindowRegistrations.removeAll()
         pendingRetryPids.removeAll()
+        failedObservePids.removeAll()
     }
 
     @objc private func handleAppLaunched(_ notification: Notification) {
@@ -277,6 +280,7 @@ public final class AXEventObserver {
                 // A just-launched app answers cannotComplete until its AX is up; an observer
                 // without window creation would never see its windows, so it is dropped and retried.
                 RibbonLog.log("AX observe failed pid=\(pid) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
+                failedObservePids.insert(pid)
                 retryLater()
                 return
             }
@@ -284,7 +288,8 @@ public final class AXEventObserver {
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         observers[pid] = obs
-        if attempt > 0 {
+        if failedObservePids.remove(pid) != nil {
+            RibbonLog.log("AX observe succeeded late pid=\(pid) attempt=\(attempt)", category: "discovery")
             delegate?.applicationEventOccurred(kind: .observedLate, pid: pid)
         }
 
@@ -322,6 +327,7 @@ public final class AXEventObserver {
     public func removeObserver(pid: pid_t) {
         pendingWindowRegistrations.removeValue(forKey: pid)
         pendingRetryPids.remove(pid)
+        failedObservePids.remove(pid)
         if let obs = observers.removeValue(forKey: pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         }
