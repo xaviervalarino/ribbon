@@ -87,6 +87,33 @@ extension WindowManager {
         return lines.joined(separator: "\n")
     }
 
+    /// Every AX window of the apps matching `appFilter`, with the attributes a float rule can key
+    /// on. Run it while the window in question is open to see what sets it apart.
+    private func debugInspect(appFilter: String?) -> String {
+        let buttons = [
+            ("close", kAXCloseButtonAttribute), ("minimize", kAXMinimizeButtonAttribute),
+            ("zoom", kAXZoomButtonAttribute), ("fullscreen", kAXFullScreenButtonAttribute),
+        ]
+        var lines: [String] = []
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            let name = app.localizedName ?? "?"
+            if let filter = appFilter, !name.lowercased().contains(filter.lowercased()) { continue }
+            for win in AXElement.application(pid: app.processIdentifier).windows {
+                let id = win.windowID
+                let frame = win.frame.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "?"
+                let present = buttons.filter { win.hasValue($0.1) }.map(\.0).joined(separator: ",")
+                lines.append(
+                    "\(name) pid=\(app.processIdentifier) wid=\(id.map(String.init) ?? "?") title=\"\(win.title)\""
+                    + " role=\(win.role) subrole=\(win.subrole) frame=\(frame)"
+                    + " sizeSettable=\(win.isSettable(kAXSizeAttribute)) modal=\(win.bool(kAXModalAttribute) ?? false)"
+                    + " buttons=\(present.isEmpty ? "none" : present)"
+                    + " admitted=\(admits(win)) inRibbon=\(id.map { spaceByWindowID[$0] != nil } ?? false)"
+                )
+            }
+        }
+        return lines.isEmpty ? "no windows" + (appFilter.map { " for '\($0)'" } ?? "") : lines.joined(separator: "\n")
+    }
+
     /// Live-tunes slide settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
         guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing <value>" }
@@ -115,6 +142,8 @@ extension WindowManager {
                 return applyDebugSetting(Array(args.dropFirst()))
             case "state":
                 return debugStateDump()
+            case "inspect":
+                return debugInspect(appFilter: args.dropFirst().first)
             case "settings":
                 return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
             default:

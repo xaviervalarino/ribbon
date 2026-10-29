@@ -29,6 +29,15 @@ A native macOS scrollable tiling window manager (Niri/PaperWM-style 1D column st
 - **Throwing a window to another Space/workspace**: manual native-Space moves are absorbed by Tier-1 rescan + liveness (window leaves the ribbon, adopted when that Space is visited). Programmatic native-Space moves are a **non-goal** (private CGS APIs only — the most fragile macOS surface). FlashSpace throws work via the displayability policy; v2 `send-to-workspace` shells out to the `flashspace` CLI (app-granularity caveat).
 - **Deferred**: event-push IPC channel (JankyBorders tracks focus itself), license choice, rename (candidate: `reel` if published).
 
+### Settled decisions (grill round 3, 2026-10-28)
+- **Overview**: a flex-row grid inside the ribbon (columns keep strip order, wrap at `overviewColumnsPerRow` = 3, cells share each row's width and height, stacked columns stack inside their cell; hjkl moves across the grid; any focus or non-focus command exits), plus a separate `mission-control` command. `overview mission-control` chains them so Mission Control shows the compact grid instead of the whole strip at thumbnail size. *Why:* Mission Control on the raw strip is too zoomed out to read.
+- **Caps + mouse**: holding caps and moving the mouse (or scrolling sideways) pans the strip after a 40pt dead zone; release snaps to the column with the most on-screen width and focuses it. Built as an experiment branch on shared pan machinery, since the user may change their mind after feeling it. Caps state reaches the daemon through `ribbon modifier caps down|up` from the Karabiner caps rule (no real modifier leaks to apps); fallback is an `f20` key read from the input tap.
+- **Trackpad**: three-finger stepping swipe ported 1:1 from `~/.hammerspoon/ribbon-swipe.lua` into the daemon first (then the Hammerspoon module retires); continuous follow stays an experiment branch gated on how the caps+mouse pan feels. System three-finger Space switching stays native.
+- **Click re-focus animates**: a click on a partly visible column slides the strip like a command does (the Phase 7 "animate click scrolls" item, now a bug).
+- **Workflow**: one branch per item off `main`; builds and RibbonCore tests run freely; any step that needs the live daemon (restart, probe, verification) stops with an `osascript` notification and waits for the user; a branch joins `main` only after the user's live test. The orchestrator never runs a ribbon command, probe or restart on its own: the user works on this Mac meanwhile.
+- **Implementers**: `gemini-3.8-flash-high` for exact-file jobs, `gemini-4-argon-medium` for new subsystems and layout design; both pre-approved for milestone 2. Job specs: `.claude/plans/milestone-2.md` (gitignored).
+- **Dropped**: resource use (the user judges it fine; the daemon measures at 0.08% CPU). Deferred: natural-height windows, zoom-style overview (needs capture or private APIs).
+
 ### Known macOS constraints (verified 2026-09)
 - `kAXHiddenAttribute` is app-level only — not settable on window elements (silently fails).
 - Window identity must be `_AXUIElementGetWindow()` → `CGWindowID` (the one private API AeroSpace/yabai use). Never `pid ^ title.hashValue` — dead elements return empty titles, so the destroy path can never match.
@@ -54,17 +63,11 @@ A native macOS scrollable tiling window manager (Niri/PaperWM-style 1D column st
 
 ---
 
-## 2. Current State (verified by code review, 2026-09-12)
+## 2. Current State (2026-10-28)
 
-`~/dev/ribbon` @ `7494b56`, 1006 lines across 10 Swift files. **The daemon has never compiled** — `bin/` holds only the CLI. ~65% of Phase 0–3 scope is written, 0% verified running.
+`main` at `affec15` plus the milestone 2 debug commands; ~3,200 lines of Swift; 71 RibbonCore tests pass. The daemon is a daily driver: 7.6 days up at 9 MB and 0.08% CPU average; slides cost WindowServer and the resizing apps, not the daemon. Phases 0–5 are done, Phase 6 is half done (per-screen ribbons), Phase 7 is mostly open. The September review that lived here (four compile and identity blockers plus a defect list) is resolved; git history holds it.
 
-Hard blockers, in dependency order:
-1. **Compile error** — `AXObserverCallback` closure captures `pid` (`AXEventObserver.swift:70`). Fix: call `AXUIElementGetPid(element, &pid)` inside the callback; no refcon box needed. Also delete the 3 gratuitous `import RibbonCore` lines (`AXElement.swift:4`, `AXEventObserver.swift:4`) — then the flat glob compiles as-is.
-2. **`dispatchMain()` kills all events** (`main.swift:21`) — it services the main dispatch queue, not the main CFRunLoop, so AX observers and NSWorkspace notifications never fire. Use `RunLoop.main.run()` (or NSApplication).
-3. **Window identity is broken by design** (`WindowManager.swift:59,145,153,160`) — `pid ^ title.hashValue`; destroy path guaranteed to leak zombie columns. Switch to CGWindowID.
-4. **Off-ribbon windows are never moved** (`WindowManager.swift:83-91`) — the hidden branch calls the no-op `isHidden` and *skips* `setFrame`, so "zero bleed" currently does nothing.
-
-Other confirmed defects (full review in git history / session notes): destroy notification registered on the app element instead of per-window; app termination never removes windows; `retile()` targets `NSScreen.main` (focus-dependent — can yank all windows across monitors); `focus()` raises but never activates the app (keyboard focus stays behind); no app-activation observation (focus desyncs on cross-app clicks); blocking socket `read()` on the main queue (one bad client freezes the daemon); no SIGPIPE handling (daemon crash on dead client); world-writable `/tmp/ribbon.sock`; `stop()` closes the fd under a live DispatchSource; `windowCreated` applies no role/subrole filter (dialogs get tiled); no minimized/fullscreen checks; `barf()` removes last instead of active window and leaves stale `activeRowIndex`; partially-offscreen columns bleed (only fully-offscreen detected); CLI always exits 0; `retile()` unconditionally re-focuses (echo-loop risk); README overstates ("hidden" windows, "sub-millisecond") — fix alongside.
+Open pain, measured in `/tmp/ribbon-501.log` (2026-10-21 to 10-28): main-thread handler stalls (focused-window change 144× avg 273ms max 2.3s; window created 141× avg 138ms), which Phase 7's adoption and AX-read items target; 17 Zen pop-up windows widened to 1205pt and snapped back by Zen; 9 slide finals that never landed.
 
 ---
 
@@ -161,6 +164,21 @@ The Ribbon 2.0 spec (agy session notes, not in repo) drove commits `6a37dd4`..`6
 - [x] Shared display edges: macOS moves a window half or more past an edge shared with another display onto that display and shrinks it (measured 2026-10-20: 24% past stays, 60% vanishes, 76% moved to the laptop at 949pt). The scroll snaps so a shared edge falls between columns, slides swap to the top/bottom stash at half, and slide finals re-read the live size. *(e13c831, 5acbb5d.)*
 - [ ] Experiment: SLS notify pump (spec PR 5). Confirm event 1401 maps 1:1 to a manual Space switch before relying on it; `NSWorkspace.activeSpaceDidChangeNotification` stays the source of truth until then.
 
+### Phase 8: Milestone 2 (2026-10-28)
+Job specs with exact files, text and verification live in `.claude/plans/milestone-2.md`; this list is the roadmap view. `[live]` items wait on the user's test.
+
+- [ ] A. Commit the `debug inspect [app]` and `debug stash-clamp [app]` commands (built, 71/71).
+- [ ] B.1 AX write failures reported back from `AppDriver`; the window's diff-cache entry is evicted and one retry retiles (dead space after `move` until the next retile).
+- [ ] B.2 Input tap (`CGEventTap`, listen-only): mouse up, mouse move, scroll, gesture; recreated on wake. Mouse up retiles after a drag.
+- [ ] B.3 Drag across displays: the dragged window is skipped by retiles until release; space-change rescans mid-drag defer to release. `[live]` two displays.
+- [ ] B.4 Click re-focus slides instead of jumping (`scheduleRetile(animated:)`). `[live]`
+- [ ] B.5 Peeking stashed window on side-by-side displays. `[live]` `debug stash-clamp` first; if WindowServer clamps top/bottom stashes, park both wings on the free side edge.
+- [ ] B.6 Zen/Bitwarden pop-up floats. `[live]` `debug inspect zen` first; admission keys on the attribute that sets the pop-up apart (size not settable, or no zoom button), plus `floatTitlePatterns` as the editable fallback.
+- [ ] C.1 `grow|shrink left|right [step]` (left variants keep the right edge fixed via the viewport offset). C.2 `align left|center|right`. C.3 `focus first|last`, `move first|last`. C.4 `mission-control`, `overview mission-control`.
+- [ ] D. Overview as a flex-row grid (`overviewColumnsPerRow`, `focusRowUp/Down`). `[live]`
+- [ ] E.1 Three-finger stepping swipe native (touch-data probe first). E.2 `modifier caps down|up`. E.3 Caps + mouse pan with dead zone and snap. E.4 Three-finger follow experiment. `[live]` each.
+- Later: natural-height windows; config file + reload + user ignore/float rules; LaunchAgent; Phase 7 main-thread work.
+
 ---
 
 ## 4. Orchestration
@@ -169,3 +187,4 @@ The Ribbon 2.0 spec (agy session notes, not in repo) drove commits `6a37dd4`..`6
 - **Known quirk**: agy headless auto-denies shell/`unsandboxed` tools — file edits still apply, but Flash can't run `make` to self-verify. Either the orchestrator runs the build itself (current approach) or pass `--dangerously-skip-permissions`.
 - **Orchestrator/reviewer**: Claude — writes task specs with the AX pitfalls baked in, reviews diffs, runs `make`.
 - Phases 0–1 are one dependent chain: run serially. Phase 2+ items fan out.
+- **Milestone 2 (2026-10-28)**: dispatch through the `agy-delegate` skill's `agy-dispatch` script; `gemini-3.8-flash-high` for exact-file jobs, `gemini-4-argon-medium` for new subsystems (both pre-approved). The orchestrator never runs `bin/ribbon` commands other than `status`/`debug settings`, never restarts the daemon, and never runs window-moving probes: it rebuilds, tests, commits to `m2/<slug>` branches, and notifies with `osascript -e 'display notification …'` when a branch needs the user's live test. Operating rules and the live-test queue: `.claude/plans/milestone-2.md` § 0 and § 5.

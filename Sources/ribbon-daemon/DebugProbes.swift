@@ -16,8 +16,14 @@ enum DebugProbes {
         switch args.first?.lowercased() {
         case "ax-latency":
             return start("ax-latency") { AXLatencyProbe.run(targets) }
+        case "stash-clamp":
+            let filter = args.dropFirst().first?.lowercased()
+            guard let target = targets.first(where: { t in filter.map { t.app.lowercased().contains($0) } ?? true }) else {
+                return "error: no on-screen ribbon window" + (filter.map { " for '\($0)'" } ?? "")
+            }
+            return start("stash-clamp") { StashClampProbe.run(target) }
         default:
-            return "error: debug probes: ax-latency"
+            return "error: debug probes: ax-latency, stash-clamp [app]"
         }
     }
 
@@ -43,6 +49,64 @@ enum DebugProbes {
               let dict = list.first?[kCGWindowBounds as String] as? NSDictionary else { return nil }
         return CGRect(dictionaryRepresentation: dict)
     }
+}
+
+/// Parks one window a sliver past each edge of its display and reads back where WindowServer
+/// put it. An edge macOS clamps leaves part of the window on screen, so a stash there peeks out.
+/// The window leaves the screen for about a second and returns to where it was.
+enum StashClampProbe {
+    static func run(_ t: DebugProbes.Target) -> [String] {
+        _ = t.element.setMessagingTimeout(DebugProbes.axTimeout)
+        guard let origin = t.element.position,
+              let start = DebugProbes.serverBounds(t.id),
+              let display = displayBounds(containing: start) else {
+            return ["stash-clamp: \(t.app) wid=\(t.id) position or display unreadable"]
+        }
+        let sliver = FreeEdgeStashEngine.sliverAnchorSize
+        var lines = [
+            "stash-clamp probe \(Date()) — \(t.app) wid=\(t.id) size=\(Int(start.width))x\(Int(start.height)) display=\(display.integral)",
+            "edge | asked origin | WindowServer origin | left on screen",
+        ]
+        let trials: [(edge: String, asked: CGPoint)] = [
+            ("left", CGPoint(x: display.minX - start.width + sliver, y: origin.y)),
+            ("right", CGPoint(x: display.maxX - sliver, y: origin.y)),
+            ("top", CGPoint(x: origin.x, y: display.minY - start.height + sliver)),
+            ("bottom", CGPoint(x: origin.x, y: display.maxY - sliver)),
+        ]
+        for trial in trials {
+            t.element.position = trial.asked
+            let got = settledBounds(t.id, at: trial.asked) ?? start
+            let visible = got.intersection(display)
+            let onScreen = visible.isEmpty ? "none" : "\(Int(visible.width))x\(Int(visible.height))pt"
+            lines.append("\(trial.edge) | \(fmt(trial.asked)) | \(fmt(got.origin)) | \(onScreen)")
+        }
+        t.element.position = origin
+        let restored = settledBounds(t.id, at: origin)?.origin ?? origin
+        lines.append("restored to \(fmt(restored))" + (restored == origin ? "" : " (asked \(fmt(origin)))"))
+        return lines
+    }
+
+    /// WindowServer's bounds once they match `asked`, else whatever they read 300ms later.
+    private static func settledBounds(_ id: CGWindowID, at asked: CGPoint) -> CGRect? {
+        let t0 = DebugProbes.nowMs()
+        var last: CGRect?
+        while DebugProbes.nowMs() - t0 < 300 {
+            last = DebugProbes.serverBounds(id)
+            if let b = last, abs(b.minX - asked.x) < 0.5, abs(b.minY - asked.y) < 0.5 { return b }
+            usleep(5_000)
+        }
+        return last
+    }
+
+    private static func displayBounds(containing rect: CGRect) -> CGRect? {
+        var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        guard CGGetActiveDisplayList(16, &ids, &count) == .success else { return nil }
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        return ids.prefix(Int(count)).map(CGDisplayBounds).first { $0.contains(center) }
+    }
+
+    private static func fmt(_ p: CGPoint) -> String { "(\(Int(p.x)), \(Int(p.y)))" }
 }
 
 /// Times AX position reads and writes per app, and how long each move takes to land in

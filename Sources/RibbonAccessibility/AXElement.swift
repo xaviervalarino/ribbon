@@ -59,6 +59,24 @@ public final class AXElement: @unchecked Sendable {
         return str
     }
 
+    public func isSettable(_ attribute: String) -> Bool {
+        var settable: DarwinBoolean = false
+        guard AXUIElementIsAttributeSettable(rawElement, attribute as CFString, &settable) == .success else { return false }
+        return settable.boolValue
+    }
+
+    /// True when the attribute answers with a value: a title-bar button that exists, a flag that is set.
+    public func hasValue(_ attribute: String) -> Bool {
+        var value: AnyObject?
+        return AXUIElementCopyAttributeValue(rawElement, attribute as CFString, &value) == .success && value != nil
+    }
+
+    public func bool(_ attribute: String) -> Bool? {
+        var value: AnyObject?
+        guard AXUIElementCopyAttributeValue(rawElement, attribute as CFString, &value) == .success else { return nil }
+        return value as? Bool
+    }
+
     public var position: CGPoint? {
         get {
             var value: AnyObject?
