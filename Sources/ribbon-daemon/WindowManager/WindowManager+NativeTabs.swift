@@ -133,6 +133,8 @@ extension WindowManager {
                         changed = true
                     }
                 } else if tiledIDs.contains(where: onScreen.contains) || pidsShowingWindows.contains(pid) {
+                    // A closed tab's held slot waits for its group's next tab, not for a hide.
+                    if closedSlot(old) != nil { continue }
                     if confirmHides {
                         let firstSeen: Double
                         if case let .orderedOut(sinceMs) = tabStates[old] {
@@ -156,13 +158,12 @@ extension WindowManager {
                     tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: firstSeen)
                 }
                 guard now - firstSeen >= tabConfirmMs else { continue }
-                // `adopt` refuses a hidden tab, so the state goes first and returns if adopt fails.
+                // `adopt` refuses a hidden tab, so the state goes first. A window adopt refuses (one
+                // on all spaces) stays untracked rather than retried on every pass.
                 tabStates[id] = nil
                 if adopt(element: element, pid: pid, activate: id == focus) {
                     RibbonLog.log("native tab adopted as window wid=\(id) pid=\(pid)", category: "tabs")
                     changed = true
-                } else {
-                    tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: firstSeen)
                 }
             }
         }
@@ -202,9 +203,8 @@ extension WindowManager {
         let oldElement = trackedWindows[old]
         let dID = displayByWindowID[old]
         removeFromRibbon(id: old)
-        if let oldElement {
-            tabStates[old] = .hidden(element: oldElement, pid: pid, shownSinceMs: nil)
-        }
+        // A closed tab's slot has no element left; its state ends with the handover.
+        tabStates[old] = oldElement.map { .hidden(element: $0, pid: pid, shownSinceMs: nil) }
 
         tabStates[new] = nil
         trackedWindows[new] = element
