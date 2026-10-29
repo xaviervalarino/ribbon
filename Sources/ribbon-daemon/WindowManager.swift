@@ -99,6 +99,8 @@ public final class WindowManager {
     var hideCandidates: [CGWindowID: Double] = [:]
     /// New windows of the frontmost app waiting untiled to learn whether they are tabs.
     var pendingNewWindows: [CGWindowID: (element: AXElement, pid: pid_t, focus: CGWindowID?, sinceMs: Double)] = [:]
+    /// Slots of closed shown tabs, kept untracked until the group's next tab shows.
+    var closedTabSlots: [CGWindowID: (pid: pid_t, sinceMs: Double)] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?
@@ -373,6 +375,7 @@ public final class WindowManager {
         strayTabs.removeAll()
         hideCandidates.removeAll()
         pendingNewWindows.removeAll()
+        closedTabSlots.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,

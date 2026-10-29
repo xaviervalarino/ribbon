@@ -360,7 +360,8 @@ extension WindowManager {
         var removedAny = false
         let currentIDs = allRibbonWindows.map(\.id)
         for id in currentIDs {
-            if adoptedSinceLastSweep.contains(id) { continue }
+            // A closed tab's slot waits for its group's next tab (holdClosedTabSlot).
+            if adoptedSinceLastSweep.contains(id) || closedTabSlots[id] != nil { continue }
             if !liveIDs.contains(id) {
                 removeFromRibbon(id: id)
                 removedAny = true

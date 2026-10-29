@@ -201,6 +201,52 @@ extension WindowManager {
         scheduleTabReconcile(pid: pid, focus: focus)
     }
 
+    /// Keeps a closed tab's slot until its group's next tab shows, for up to `newTabWaitMs`. The slot
+    /// has no element meanwhile, so retiles skip it: the next tab may still be ordered out, and a
+    /// frame written to a hidden tab moves its group.
+    func holdClosedTabSlot(_ id: CGWindowID, pid: pid_t) {
+        if let element = trackedWindows.removeValue(forKey: id) {
+            windowIDsByElement.removeValue(forKey: element.rawElement)
+        }
+        closedTabSlots[id] = (pid: pid, sinceMs: CACurrentMediaTime() * 1000)
+        if !fillClosedTabSlot(pid: pid, shown: nil) {
+            pollClosedTabSlot(id)
+        }
+    }
+
+    /// Hands the app's held closed-tab slot to `shown` (a hidden tab that just took focus), else to
+    /// the app's hidden tab now on screen. False while no tab has shown.
+    @discardableResult
+    func fillClosedTabSlot(pid: pid_t, shown: CGWindowID?) -> Bool {
+        guard let slot = closedTabSlots.first(where: { $0.value.pid == pid })?.key else { return false }
+        let onScreen = shown == nil ? (onScreenWindowIDs() ?? []) : []
+        guard let new = shown ?? nativeTabIDs(pid: pid).first(where: onScreen.contains),
+              let tab = nativeTabs[new] else { return false }
+        closedTabSlots.removeValue(forKey: slot)
+        if swapTab(out: slot, in: new, element: tab.element, pid: pid, focus: shown) {
+            scheduleTabReconcile(pid: pid)
+        } else {
+            removeFromRibbon(id: slot)
+        }
+        scheduleRetile()
+        return true
+    }
+
+    private func pollClosedTabSlot(_ id: CGWindowID) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
+            guard let self, !self.isStopped, let slot = self.closedTabSlots[id] else { return }
+            if self.fillClosedTabSlot(pid: slot.pid, shown: nil) { return }
+            guard CACurrentMediaTime() * 1000 - slot.sinceMs >= self.newTabWaitMs else {
+                self.pollClosedTabSlot(id)
+                return
+            }
+            self.closedTabSlots.removeValue(forKey: id)
+            self.removeFromRibbon(id: id)
+            self.scheduleRetile()
+            self.scheduleTabReconcile(pid: slot.pid)
+        }
+    }
+
     /// Reconciles the app's tabs once its tab switch or window creation has settled.
     func scheduleTabReconcile(pid: pid_t, focus: CGWindowID? = nil) {
         for ms in [100, 300, 800] {
