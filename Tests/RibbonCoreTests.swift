@@ -321,6 +321,11 @@ func runTests() {
     TestRunner.assertTrue(abs(appliedGrow - 0.1) < 1e-9, "Grow from 0.5 by 0.1 applies 0.1")
     TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 0.6, "Column ratio is updated to 0.6")
 
+    var driftRibbon = c1Ribbon
+    driftRibbon.adjustWidth(by: 0.1)
+    driftRibbon.adjustWidth(by: -0.2)
+    TestRunner.assertEqual(driftRibbon.columns[0].widthRatio, 0.5, "Steps there and back land exactly on 0.5")
+
     let appliedClampHigh = c1Ribbon.adjustWidth(by: 0.8)
     TestRunner.assertTrue(abs(appliedClampHigh - 0.4) < 1e-9, "Growth clamped at 1.0 applies only 0.4")
     TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 1.0, "Column ratio clamps at 1.0")
