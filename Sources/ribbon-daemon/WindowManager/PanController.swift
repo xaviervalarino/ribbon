@@ -8,12 +8,15 @@ final class PanController {
     /// Pointer travel below this many points pans nothing, so caps chords with a resting hand stay still.
     private static let deadZone: Double = 40
     private static let idleTimeoutNs: UInt64 = 300_000_000
+    /// Caps holds expire after 10s so a lost `modifier caps up` cannot leave pointer motion panning.
+    private static let holdTimeoutNs: UInt64 = 10_000_000_000
 
     private weak var windowManager: WindowManager?
     private(set) var isPanning = false
     private var accumulatedDX = 0.0
     private var lastMotionTime: DispatchTime = .now()
     private var needsFlush = false
+    private var flushCount = 0
     private var flushTimer: DispatchSourceTimer?
 
     init(windowManager: WindowManager) {
@@ -23,11 +26,17 @@ final class PanController {
     func resetIfIdle() {
         guard !isPanning else { return }
         accumulatedDX = 0
+        lastMotionTime = .now()
     }
 
     func handleMotion(dx: Double) {
+        guard !expireHoldIfNeeded() else { return }
         guard dx != 0, let wm = windowManager else { return }
-        lastMotionTime = .now()
+        let now = DispatchTime.now()
+        if !isPanning, now.uptimeNanoseconds - lastMotionTime.uptimeNanoseconds >= Self.idleTimeoutNs {
+            accumulatedDX = 0
+        }
+        lastMotionTime = now
         accumulatedDX += dx
         guard abs(accumulatedDX) >= Self.deadZone else { return }
 
@@ -41,8 +50,14 @@ final class PanController {
         let wasPanning = isPanning
         if !wasPanning {
             isPanning = true
+            flushCount = 0
             wm.panningSpaceID = sID
             r.isOverview = false
+            let spaceWindowIDs = Set(r.columns.flatMap { $0.windows.map(\.id) })
+            for id in spaceWindowIDs where wm.scrollAnimator.isAnimating(id) {
+                wm.lastAppliedFrames.removeValue(forKey: id)
+            }
+            wm.scrollAnimator.cancel(windowIDs: spaceWindowIDs)
             RibbonLog.log("pan started space=\(sID) offset=\(Int(r.viewportOffset))", category: "pan")
         }
 
@@ -61,6 +76,8 @@ final class PanController {
     func endPan(snap: Bool) {
         accumulatedDX = 0
         needsFlush = false
+        let flushes = flushCount
+        flushCount = 0
         stopFlushTimer()
 
         guard isPanning, let wm = windowManager else {
@@ -72,7 +89,10 @@ final class PanController {
         let sID = wm.panningSpaceID ?? wm.currentActiveSpaceID()
         wm.panningSpaceID = nil
 
-        guard snap, var r = wm.ribbons[sID], !r.columns.isEmpty else { return }
+        guard snap, var r = wm.ribbons[sID], !r.columns.isEmpty else {
+            RibbonLog.log("pan ended: \(flushes) flushes", category: "pan")
+            return
+        }
         let dID = wm.displayBySpaceID[sID] ?? wm.activeDisplayID ?? NSScreen.main?.displayID ?? 0
         let canvasWidth = wm.screen(forDisplayID: dID).map {
             Double($0.visibleFrame.width) - (wm.config.edgeMargin * 2)
@@ -104,7 +124,7 @@ final class PanController {
             wm.ribbons[sID] = r
         }
 
-        RibbonLog.log("pan ended focus wid=\(targetWindowID ?? 0)", category: "pan")
+        RibbonLog.log("pan ended: \(flushes) flushes focus wid=\(targetWindowID ?? 0)", category: "pan")
         wm.retileNow(focusWindowID: targetWindowID, animated: true)
     }
 
@@ -112,8 +132,23 @@ final class PanController {
         isPanning = false
         accumulatedDX = 0
         needsFlush = false
+        flushCount = 0
         stopFlushTimer()
         windowManager?.panningSpaceID = nil
+    }
+
+    private func expireHoldIfNeeded() -> Bool {
+        guard let wm = windowManager, wm.capsHeld else { return true }
+        if let downAt = wm.capsDownAt,
+           DispatchTime.now().uptimeNanoseconds - downAt.uptimeNanoseconds < Self.holdTimeoutNs {
+            return false
+        }
+        wm.capsHeld = false
+        wm.capsDownAt = nil
+        wm.inputTap.setPointerMonitoring(false)
+        RibbonLog.log("caps hold expired", category: "pan")
+        endPan(snap: true)
+        return true
     }
 
     private func startFlushTimer() {
@@ -133,13 +168,18 @@ final class PanController {
     }
 
     private func tick() {
+        guard !expireHoldIfNeeded() else {
+            stopFlushTimer()
+            return
+        }
         guard isPanning, let wm = windowManager else {
             stopFlushTimer()
             return
         }
         if needsFlush {
             needsFlush = false
-            wm.retileNow(animated: false)
+            flushCount += 1
+            wm.retileNow(animated: false, quiet: true)
         }
         let elapsedNs = DispatchTime.now().uptimeNanoseconds - lastMotionTime.uptimeNanoseconds
         if elapsedNs >= Self.idleTimeoutNs,

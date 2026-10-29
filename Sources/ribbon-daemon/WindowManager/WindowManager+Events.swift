@@ -8,6 +8,7 @@ extension WindowManager {
 
     public func handleActiveSpaceDidChange() {
         guard !isDisplayReconfiguring else { return }
+        panController.endPan(snap: false)
 
         let topology = SpaceManager.currentTopology()
         for (sID, dID) in topology.displayBySpace {
@@ -336,6 +337,9 @@ extension WindowManager: AXEventObserverDelegate {
 
 extension WindowManager: InputTapDelegate {
     func mouseUp() {
+        if panController.isPanning {
+            panController.endPan(snap: false)
+        }
         guard dragDirty else { return }
         dragDirty = false
         // An edge drag that moved the origin also resized: retiling before the resize debounce

@@ -49,10 +49,10 @@ extension WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: work)
     }
 
-    func retileNow(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false) {
+    func retileNow(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false, quiet: Bool = false) {
         retileWork?.cancel()
         retileWork = nil
-        retile(allSpaces: allSpaces, focusWindowID: focusWindowID, animated: animated)
+        retile(allSpaces: allSpaces, focusWindowID: focusWindowID, animated: animated, quiet: quiet)
     }
 
     // MARK: - Layout & Retile
@@ -60,7 +60,7 @@ extension WindowManager {
     /// Recomputes and applies layouts. `focusWindowID` is focused by its AppDriver
     /// after that driver's moves land, so the window is never focused while off-screen.
     /// `animated` slides moving windows instead of jumping them (command-driven scrolls).
-    public func retile(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false) {
+    public func retile(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false, quiet: Bool = false) {
         guard !isDisplayReconfiguring else { return }
         guard !NSScreen.screens.isEmpty else { return }
         // In AppKit, (0, 0) is at the bottom-left of the primary display.
@@ -142,7 +142,7 @@ extension WindowManager {
         }
 
         applyFrames(framesToApply, naturalFrames: naturalFrames, displayFrames: displayFrames,
-                    focusWindowID: focusWindowID, animated: animated)
+                    focusWindowID: focusWindowID, animated: animated, quiet: quiet)
     }
 
     /// Groups window mutations by target process and dispatches them asynchronously
@@ -152,7 +152,8 @@ extension WindowManager {
         naturalFrames: [CGWindowID: CGRect] = [:],
         displayFrames: [CGWindowID: CGRect] = [:],
         focusWindowID: CGWindowID? = nil,
-        animated: Bool = false
+        animated: Bool = false,
+        quiet: Bool = false
     ) {
         var mutationsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
         var slidesByID: [CGWindowID: ScrollAnimator.Slide] = [:]
@@ -276,7 +277,8 @@ extension WindowManager {
                 frame: entry.frame,
                 needsFullFrame: needsFullFrame,
                 needsMove: needsMove,
-                shouldFocus: shouldFocus
+                shouldFocus: shouldFocus,
+                quiet: quiet
             )
             mutationsByPID[entry.pid, default: []].append(mutation)
         }
