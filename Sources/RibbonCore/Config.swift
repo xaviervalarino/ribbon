@@ -37,6 +37,10 @@ public struct Config: Sendable, Codable {
     public var scrollAnimationMs: Int
     public var resizeMode: ResizeMode
     public var focusTiming: FocusTiming
+    public var swipeFingers: Int
+    public var swipeFirst: Double
+    public var swipeStep: Double
+    public var swipeReverse: Double
 
     public init(
         windowGap: Double = 4.0,
@@ -70,7 +74,11 @@ public struct Config: Sendable, Codable {
         spaceChangeDebounceMs: Int = 25,
         scrollAnimationMs: Int = 55,
         resizeMode: ResizeMode = .end,
-        focusTiming: FocusTiming = .end
+        focusTiming: FocusTiming = .end,
+        swipeFingers: Int = 3,
+        swipeFirst: Double = 0.03,
+        swipeStep: Double = 0.15,
+        swipeReverse: Double = 0.04
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -84,6 +92,10 @@ public struct Config: Sendable, Codable {
         self.scrollAnimationMs = scrollAnimationMs
         self.resizeMode = resizeMode
         self.focusTiming = focusTiming
+        self.swipeFingers = swipeFingers
+        self.swipeFirst = swipeFirst
+        self.swipeStep = swipeStep
+        self.swipeReverse = swipeReverse
     }
 
     public static let `default` = Config()
