@@ -97,6 +97,23 @@ public final class WindowManager {
     var dragDirty = false
     var draggingWindowID: CGWindowID?
     var spaceChangeDeferred = false
+    var capsHeld = false
+    var capsDownAt: DispatchTime?
+    var panningSpaceID: SpaceID?
+    lazy var panController = PanController(windowManager: self)
+    struct TouchesProbeState {
+        var isArmed = false
+        var bucketTimer: DispatchSourceTimer?
+        var endWork: DispatchWorkItem?
+        var lastTouchCount = 0
+        var lastMeanX: Double?
+        var maxTouches = 0
+        var events = 0
+        var dx = 0.0
+        var swipes = 0
+        var swipeDX = 0.0
+    }
+    var touchesProbe = TouchesProbeState()
     var displaySamplingTimer: DispatchSourceTimer?
     var displaySamplingCount: Int = 0
 
@@ -342,6 +359,11 @@ public final class WindowManager {
         retileAnimated = false
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
+        panController.stop()
+        touchesProbe.bucketTimer?.cancel()
+        touchesProbe.bucketTimer = nil
+        touchesProbe.endWork?.cancel()
+        touchesProbe.endWork = nil
         displaySamplingTimer?.cancel()
         displaySamplingTimer = nil
         if let obs = screenParametersObserver {

@@ -375,9 +375,84 @@ extension WindowManager: InputTapDelegate {
         }
     }
 
-    func mouseMoved(dx: Double, dy: Double) {}
+    func mouseMoved(dx: Double, dy: Double) {
+        guard capsHeld else { return }
+        panController.handleMotion(dx: dx)
+    }
 
-    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {}
+    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {
+        guard capsHeld else { return }
+        panController.handleMotion(dx: dx)
+    }
 
-    func gesture(_ event: CGEvent) {}
+    func setTouchesProbe(_ on: Bool) {
+        touchesProbe.bucketTimer?.cancel()
+        touchesProbe.bucketTimer = nil
+        touchesProbe.endWork?.cancel()
+        touchesProbe.endWork = nil
+
+        if !on {
+            if touchesProbe.isArmed {
+                flushTouchesProbeBucket()
+                touchesProbe = TouchesProbeState()
+                inputTap.setGestureMonitoring(false)
+                RibbonLog.log("touches probe off", category: "input")
+            }
+            return
+        }
+
+        flushTouchesProbeBucket()
+        touchesProbe = TouchesProbeState(isArmed: true)
+        inputTap.setGestureMonitoring(true)
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+        timer.setEventHandler { [weak self] in
+            self?.flushTouchesProbeBucket()
+        }
+        timer.resume()
+        touchesProbe.bucketTimer = timer
+
+        let endWork = DispatchWorkItem { [weak self] in
+            self?.setTouchesProbe(false)
+        }
+        touchesProbe.endWork = endWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(10), execute: endWork)
+    }
+
+    private func flushTouchesProbeBucket() {
+        guard touchesProbe.events > 0 || touchesProbe.swipes > 0 else { return }
+        let dxText = String(format: "%.3f", touchesProbe.dx)
+        RibbonLog.log(
+            "touches=\(touchesProbe.maxTouches) events=\(touchesProbe.events) dx=\(dxText) swipes=\(touchesProbe.swipes) swipeDX=\(touchesProbe.swipeDX)",
+            category: "input"
+        )
+        touchesProbe.maxTouches = 0
+        touchesProbe.events = 0
+        touchesProbe.dx = 0
+        touchesProbe.swipes = 0
+        touchesProbe.swipeDX = 0
+    }
+
+    func gesture(_ event: CGEvent) {
+        guard touchesProbe.isArmed, let nsEvent = NSEvent(cgEvent: event) else { return }
+        let touches = nsEvent.touches(matching: .touching, in: nil).filter { $0.type == .indirect }
+        let count = touches.count
+        let meanX: Double? = count > 0
+            ? touches.reduce(0.0) { $0 + Double($1.normalizedPosition.x) } / Double(count)
+            : nil
+        if count > 0, count == touchesProbe.lastTouchCount, let meanX, let prevX = touchesProbe.lastMeanX {
+            touchesProbe.dx += meanX - prevX
+        }
+        touchesProbe.lastTouchCount = count
+        touchesProbe.lastMeanX = meanX
+        touchesProbe.events += 1
+        touchesProbe.maxTouches = max(touchesProbe.maxTouches, count)
+    }
+
+    func swipe(_ event: CGEvent) {
+        guard touchesProbe.isArmed, let nsEvent = NSEvent(cgEvent: event) else { return }
+        touchesProbe.swipes += 1
+        touchesProbe.swipeDX += Double(nsEvent.deltaX)
+    }
 }

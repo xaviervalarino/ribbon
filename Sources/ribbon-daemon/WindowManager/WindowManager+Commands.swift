@@ -161,6 +161,18 @@ extension WindowManager {
                 return debugInspect(appFilter: args.dropFirst().first)
             case "settings":
                 return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
+            case "touches":
+                guard args.count == 2 else { return "error: usage: debug touches on|off" }
+                switch args[1].lowercased() {
+                case "on":
+                    setTouchesProbe(true)
+                    return "ok"
+                case "off":
+                    setTouchesProbe(false)
+                    return "ok"
+                default:
+                    return "error: usage: debug touches on|off"
+                }
             default:
                 break
             }
@@ -173,6 +185,9 @@ extension WindowManager {
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
+        if action != "modifier" {
+            panController.endPan(snap: false)
+        }
 
         let beforeRibbon = ribbons[sID] ?? Ribbon()
         let previousActive = beforeRibbon.activeWindow?.id
@@ -266,6 +281,25 @@ extension WindowManager {
             }
         case "mission-control":
             launchMissionControl()
+            return "ok"
+        case "modifier":
+            guard parts.count == 3, parts[1].lowercased() == "caps" else {
+                return "error: usage: modifier caps down|up"
+            }
+            switch parts[2].lowercased() {
+            case "down":
+                capsHeld = true
+                capsDownAt = .now()
+                panController.resetIfIdle()
+                inputTap.setPointerMonitoring(true)
+            case "up":
+                capsHeld = false
+                capsDownAt = nil
+                inputTap.setPointerMonitoring(false)
+                panController.endPan(snap: true)
+            default:
+                return "error: usage: modifier caps down|up"
+            }
             return "ok"
         case "focus-display":
             let screens = NSScreen.screens

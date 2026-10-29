@@ -144,11 +144,13 @@ extension WindowManager {
             let screenFullQuartzFrame = targetDisplay?.frame ?? QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight)
 
             let canvasW = screenQuartzFrame.width - (config.edgeMargin * 2)
-            let sharedEdges = SharedEdges(screenFrame: screenQuartzFrame, config: config,
-                                          targetDisplay: targetDisplay, allDisplays: allDisplayBounds)
-            r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config,
-                                                                sharedEdges: sharedEdges)
-            ribbons[sID] = r
+            if panningSpaceID != sID {
+                let sharedEdges = SharedEdges(screenFrame: screenQuartzFrame, config: config,
+                                              targetDisplay: targetDisplay, allDisplays: allDisplayBounds)
+                r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config,
+                                                                    sharedEdges: sharedEdges)
+                ribbons[sID] = r
+            }
 
             let plan = LayoutEngine.computePlan(
                 for: r,

@@ -451,6 +451,24 @@ func runTests() {
     navRibbon.activeColumnIndex = 2
     navRibbon.focusRowUp(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
+    // 12. SwipeStepper thresholds, axis lock, reversal, finger reset, and excess drop
+    var stepper = SwipeStepper()
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.06, dy: 0, config: config), nil, "Under 0.03 travel does not step")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), .focusRight, "First negative crossing at 0.03 steps focus right")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.42, dy: 0, config: config), nil, "Second step the same way needs 0.15 travel")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), .focusRight, "Second step fires at 0.15 travel")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: 0.09, dy: 0, config: config), nil, "Reversal under 0.04 travel does not step")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: 0.03, dy: 0, config: config), .focusLeft, "Reversal at 0.04 travel steps focus left")
+
+    var verticalStepper = SwipeStepper()
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 3, dx: 0, dy: 0.09, config: config), nil, "Vertical crossing at 0.03 locks y axis without stepping")
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 3, dx: -0.60, dy: 0, config: config), nil, "Locked y axis never steps on horizontal motion")
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 2, dx: 0, dy: 0, config: config), nil, "Finger count of 2 resets travel and axis")
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 3, dx: 0.09, dy: 0, config: config), .focusLeft, "After 2-finger reset, 0.03 positive travel steps focus left")
+
+    var flickStepper = SwipeStepper()
+    TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.90, dy: 0, config: config), .focusRight, "Fast flick fires one step")
+    TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), nil, "Excess travel past threshold is dropped")
 
     guard TestRunner.summary() else {
         exit(1)
