@@ -349,9 +349,15 @@ extension WindowManager: InputTapDelegate {
         }
     }
 
-    func mouseMoved(dx: Double, dy: Double) {}
+    func mouseMoved(dx: Double, dy: Double) {
+        guard capsHeld else { return }
+        panController.handleMotion(dx: dx)
+    }
 
-    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {}
+    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {
+        guard capsHeld else { return }
+        panController.handleMotion(dx: dx)
+    }
 
     func setTouchesProbe(_ on: Bool) {
         touchesProbe.bucketTimer?.cancel()

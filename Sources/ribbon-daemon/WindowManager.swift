@@ -96,6 +96,8 @@ public final class WindowManager {
     var dragDirty = false
     var capsHeld = false
     var capsDownAt: DispatchTime?
+    var panningSpaceID: SpaceID?
+    lazy var panController = PanController(windowManager: self)
     struct TouchesProbeState {
         var isArmed = false
         var bucketTimer: DispatchSourceTimer?
@@ -346,6 +348,7 @@ public final class WindowManager {
         retileWork = nil
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
+        panController.stop()
         touchesProbe.bucketTimer?.cancel()
         touchesProbe.bucketTimer = nil
         touchesProbe.endWork?.cancel()

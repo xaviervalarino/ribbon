@@ -26,15 +26,25 @@ final class InputTap {
     private var runLoopSource: CFRunLoopSource?
     private var loggedUnavailable = false
     private var gestureMonitoring = false
+    private var pointerMonitoring = false
 
     /// Only events with a delegate consumer are in the mask: every masked event wakes the main
     /// run loop, and a backed-up port drops events (a lost mouse-up included).
     private var events: [CGEventType] {
         var list: [CGEventType] = [.leftMouseUp]
+        if pointerMonitoring {
+            list.append(contentsOf: [.mouseMoved, .scrollWheel])
+        }
         if gestureMonitoring {
             list.append(contentsOf: [gestureEventType, swipeEventType])
         }
         return list
+    }
+
+    func setPointerMonitoring(_ on: Bool) {
+        guard on != pointerMonitoring else { return }
+        pointerMonitoring = on
+        start()
     }
 
     func setGestureMonitoring(_ on: Bool) {

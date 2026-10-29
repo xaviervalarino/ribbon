@@ -169,6 +169,9 @@ extension WindowManager {
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
+        if action != "modifier" {
+            panController.endPan(snap: false)
+        }
 
         let beforeRibbon = ribbons[sID] ?? Ribbon()
         let previousActive = beforeRibbon.activeWindow?.id
@@ -216,9 +219,13 @@ extension WindowManager {
             case "down":
                 capsHeld = true
                 capsDownAt = .now()
+                panController.resetIfIdle()
+                inputTap.setPointerMonitoring(true)
             case "up":
                 capsHeld = false
                 capsDownAt = nil
+                inputTap.setPointerMonitoring(false)
+                panController.endPan(snap: true)
             default:
                 return "error: usage: modifier caps down|up"
             }
