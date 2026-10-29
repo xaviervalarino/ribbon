@@ -84,6 +84,7 @@ public final class WindowManager {
 
     public var config = Config.default
     let observer = AXEventObserver()
+    let inputTap = InputTap()
     let socketServer = SocketServer()
     var trackedWindows: [CGWindowID: AXElement] = [:]
     var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
@@ -92,6 +93,9 @@ public final class WindowManager {
     var retileWork: DispatchWorkItem?
     var resizeDebounceWork: DispatchWorkItem?
     var isDisplayReconfiguring: Bool = false
+    var dragDirty = false
+    var draggingWindowID: CGWindowID?
+    var spaceChangeDeferred = false
     var displaySamplingTimer: DispatchSourceTimer?
     var displaySamplingCount: Int = 0
 
@@ -217,6 +221,8 @@ public final class WindowManager {
 
         // Start event observer
         observer.start()
+        inputTap.delegate = self
+        inputTap.start()
 
         // Scan existing windows
         discoverExistingWindows()
@@ -249,7 +255,10 @@ public final class WindowManager {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.displayConfigurationChanged()
+            guard let self else { return }
+            // Gesture events arrive with no touches after sleep until the tap is recreated.
+            self.inputTap.start()
+            self.displayConfigurationChanged()
         }
 
         retileNow()
@@ -341,6 +350,7 @@ public final class WindowManager {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             wakeObserver = nil
         }
+        inputTap.stop()
         observer.stop()
 
         if !forRestart {

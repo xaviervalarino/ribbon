@@ -14,6 +14,16 @@ extension WindowManager {
             displayBySpaceID[sID] = dID
         }
 
+        // Space changes during a drag defer reconciliation and retiling until mouse-up.
+        if inputTap.isRunning && CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            dragDirty = true
+            if !spaceChangeDeferred {
+                spaceChangeDeferred = true
+                RibbonLog.log("space change deferred to drag end", category: "drag")
+            }
+            return
+        }
+
         reconcileWindows(sortHorizontally: false)
         syncFocusToFrontmostWindow()
 
@@ -153,7 +163,13 @@ extension WindowManager: AXEventObserverDelegate {
                     activeSpaceID = newSID
                     lastAppliedFrames.removeValue(forKey: id)
                     let isDragging = CGEventSource.buttonState(.combinedSessionState, button: .left)
-                    if !isDragging {
+                    if isDragging {
+                        if draggingWindowID != id {
+                            RibbonLog.log("drag started wid=\(id)", category: "drag")
+                            draggingWindowID = id
+                        }
+                        dragDirty = true
+                    } else {
                         scheduleRetile()
                     }
                     return
@@ -164,6 +180,13 @@ extension WindowManager: AXEventObserverDelegate {
         // Manual move: mark dirty in diff cache; keyboard retiles snap it back,
         // but avoid fighting the mouse cursor mid-drag.
         lastAppliedFrames.removeValue(forKey: id)
+        if CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            if draggingWindowID != id {
+                RibbonLog.log("drag started wid=\(id)", category: "drag")
+                draggingWindowID = id
+            }
+            dragDirty = true
+        }
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
@@ -325,4 +348,38 @@ extension WindowManager: AXEventObserverDelegate {
         }
         scheduleRetile()
     }
+}
+
+// MARK: - InputTapDelegate
+
+extension WindowManager: InputTapDelegate {
+    func mouseUp() {
+        draggingWindowID = nil
+        guard dragDirty else { return }
+        dragDirty = false
+        let spaceChanged = spaceChangeDeferred
+        spaceChangeDeferred = false
+        RibbonLog.log("drag ended: \(spaceChanged ? "space change" : "retile")", category: "drag")
+        let finish = { [weak self] in
+            guard let self else { return }
+            if spaceChanged {
+                self.handleActiveSpaceDidChange()
+            } else {
+                self.scheduleRetile()
+            }
+        }
+        // An edge drag that moved the origin also resized: retiling before the resize debounce
+        // measures the new width writes the old width back and the debounce then sees no change.
+        if resizeDebounceWork != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200), execute: finish)
+        } else {
+            finish()
+        }
+    }
+
+    func mouseMoved(dx: Double, dy: Double) {}
+
+    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {}
+
+    func gesture(_ event: CGEvent) {}
 }

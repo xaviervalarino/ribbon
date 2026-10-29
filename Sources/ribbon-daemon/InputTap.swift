@@ -1,0 +1,102 @@
+import Foundation
+import CoreGraphics
+
+private let gestureEventType = CGEventType(rawValue: 29)!
+
+protocol InputTapDelegate: AnyObject {
+    func mouseUp()
+    func mouseMoved(dx: Double, dy: Double)
+    /// `phase` is nil for a wheel tick, which carries no scroll phase.
+    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase)
+    func gesture(_ event: CGEvent)
+}
+
+private let inputTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
+    guard let userInfo else { return Unmanaged.passUnretained(event) }
+    let tap = Unmanaged<InputTap>.fromOpaque(userInfo).takeUnretainedValue()
+    tap.handleEvent(type: type, event: event)
+    return Unmanaged.passUnretained(event)
+}
+
+final class InputTap {
+    weak var delegate: InputTapDelegate?
+    private var tapPort: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
+    private var loggedUnavailable = false
+
+    /// Mouse-up only arrives while the tap runs; drag state that waits for it checks this first.
+    var isRunning: Bool { tapPort != nil }
+
+    /// Only events with a delegate consumer are in the mask: every masked event wakes the main
+    /// run loop, and a backed-up port drops events (a lost mouse-up included).
+    private let events: [CGEventType] = [.leftMouseUp]
+
+    func start() {
+        stop()
+
+        let mask = events.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
+        guard let port = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .listenOnly,
+            eventsOfInterest: mask,
+            callback: inputTapCallback,
+            userInfo: Unmanaged.passUnretained(self).toOpaque()
+        ) else {
+            if !loggedUnavailable {
+                loggedUnavailable = true
+                RibbonLog.log("input tap unavailable: CGEvent.tapCreate returned nil", category: "input")
+            }
+            return
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, port, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: port, enable: true)
+        tapPort = port
+        runLoopSource = source
+        RibbonLog.log("input tap started", category: "input")
+    }
+
+    func stop() {
+        if let port = tapPort {
+            CGEvent.tapEnable(tap: port, enable: false)
+            CFMachPortInvalidate(port)
+            tapPort = nil
+        }
+        if let source = runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes)
+            runLoopSource = nil
+        }
+    }
+
+    fileprivate func handleEvent(type: CGEventType, event: CGEvent) {
+        switch type {
+        case .tapDisabledByTimeout, .tapDisabledByUserInput:
+            guard let port = tapPort else { return }
+            CGEvent.tapEnable(tap: port, enable: true)
+            RibbonLog.log("input tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")", category: "input")
+            // Events are dropped while the tap is disabled; a released button means the mouse-up was one of them.
+            if !CGEventSource.buttonState(.combinedSessionState, button: .left) {
+                delegate?.mouseUp()
+            }
+        case .leftMouseUp:
+            delegate?.mouseUp()
+        case .mouseMoved, .leftMouseDragged:
+            let dx = event.getDoubleValueField(.mouseEventDeltaX)
+            let dy = event.getDoubleValueField(.mouseEventDeltaY)
+            delegate?.mouseMoved(dx: dx, dy: dy)
+        case .scrollWheel:
+            let dx = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
+            let dy = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
+            let phaseRaw = UInt32(truncatingIfNeeded: event.getIntegerValueField(.scrollWheelEventScrollPhase))
+            let momentumRaw = UInt32(truncatingIfNeeded: event.getIntegerValueField(.scrollWheelEventMomentumPhase))
+            let momentum = CGMomentumScrollPhase(rawValue: momentumRaw) ?? .none
+            delegate?.scrolled(dx: dx, dy: dy, phase: CGScrollPhase(rawValue: phaseRaw), momentum: momentum)
+        case gestureEventType:
+            delegate?.gesture(event)
+        default:
+            break
+        }
+    }
+}
