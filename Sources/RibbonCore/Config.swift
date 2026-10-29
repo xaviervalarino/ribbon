@@ -27,6 +27,7 @@ public struct Config: Sendable, Codable {
     public var windowGap: Double
     public var edgeMargin: Double
     public var defaultWidthRatio: Double
+    public var widthStep: Double
     public var widthCycleRatios: [Double]
     public var appWidthRatios: [String: Double]
     public var ignoredApps: Set<String>
@@ -42,6 +43,7 @@ public struct Config: Sendable, Codable {
         windowGap: Double = 4.0,
         edgeMargin: Double = 2.0,
         defaultWidthRatio: Double = 0.5,
+        widthStep: Double = 0.1,
         widthCycleRatios: [Double] = [0.382, 0.5, 0.618, 0.8, 1.0],
         appWidthRatios: [String: Double] = [
             "Zen Browser": 0.8,
@@ -75,6 +77,7 @@ public struct Config: Sendable, Codable {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
         self.defaultWidthRatio = defaultWidthRatio
+        self.widthStep = widthStep
         self.widthCycleRatios = widthCycleRatios
         self.appWidthRatios = appWidthRatios
         self.ignoredApps = ignoredApps
