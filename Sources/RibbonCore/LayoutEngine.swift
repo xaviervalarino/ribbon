@@ -182,6 +182,18 @@ public struct LayoutEngine: Sendable {
         return result
     }
 
+    /// The offset a released pan settles at: the active column centered when the pan left its
+    /// center within `config.panCenterSnap` of the canvas width from the canvas center, otherwise
+    /// where the pan left the strip.
+    public static func panReleaseOffset(for ribbon: Ribbon, canvasWidth: Double, config: Config) -> Double {
+        let geometry = columnGeometry(for: ribbon, canvasWidth: canvasWidth, config: config)
+        guard !geometry.isEmpty else { return ribbon.viewportOffset }
+        let active = geometry[max(0, min(ribbon.activeColumnIndex, geometry.count - 1))]
+        let distance = abs(active.x + active.width / 2 - ribbon.viewportOffset - canvasWidth / 2)
+        guard distance <= config.panCenterSnap * canvasWidth else { return ribbon.viewportOffset }
+        return alignedOffset(for: ribbon, canvasWidth: canvasWidth, config: config, alignment: .center)
+    }
+
     /// The column a released pan focuses. A column fully on the canvas wins, the one nearest the
     /// active column, so the snap leaves the strip where the pan put it; when none fits, the most
     /// visible column wins (the active one on a tie) and the snap scrolls it into view.
