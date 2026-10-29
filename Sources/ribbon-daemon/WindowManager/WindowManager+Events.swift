@@ -336,15 +336,22 @@ extension WindowManager: AXEventObserverDelegate {
 
 extension WindowManager: InputTapDelegate {
     func mouseUp() {
-        if dragDirty {
-            dragDirty = false
+        guard dragDirty else { return }
+        dragDirty = false
+        // An edge drag that moved the origin also resized: retiling before the resize debounce
+        // measures the new width writes the old width back and the debounce then sees no change.
+        if resizeDebounceWork != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak self] in
+                self?.scheduleRetile()
+            }
+        } else {
             scheduleRetile()
         }
     }
 
     func mouseMoved(dx: Double, dy: Double) {}
 
-    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase, momentum: CGMomentumScrollPhase) {}
+    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {}
 
     func gesture(_ event: CGEvent) {}
 }

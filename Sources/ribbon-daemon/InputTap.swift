@@ -6,7 +6,8 @@ private let gestureEventType = CGEventType(rawValue: 29)!
 protocol InputTapDelegate: AnyObject {
     func mouseUp()
     func mouseMoved(dx: Double, dy: Double)
-    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase, momentum: CGMomentumScrollPhase)
+    /// `phase` is nil for a wheel tick, which carries no scroll phase.
+    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase)
     func gesture(_ event: CGEvent)
 }
 
@@ -23,18 +24,14 @@ final class InputTap {
     private var runLoopSource: CFRunLoopSource?
     private var loggedUnavailable = false
 
+    /// Only events with a delegate consumer are in the mask: every masked event wakes the main
+    /// run loop, and a backed-up port drops events (a lost mouse-up included).
+    private let events: [CGEventType] = [.leftMouseUp]
+
     func start() {
         stop()
 
-        let events: [CGEventType] = [
-            .leftMouseUp,
-            .mouseMoved,
-            .leftMouseDragged,
-            .scrollWheel,
-            gestureEventType
-        ]
         let mask = events.reduce(CGEventMask(0)) { $0 | (1 << $1.rawValue) }
-
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
@@ -45,7 +42,7 @@ final class InputTap {
         ) else {
             if !loggedUnavailable {
                 loggedUnavailable = true
-                RibbonLog.log("input tap unavailable: grant Input Monitoring to Ribbon.app", category: "input")
+                RibbonLog.log("input tap unavailable: CGEvent.tapCreate returned nil", category: "input")
             }
             return
         }
@@ -55,6 +52,7 @@ final class InputTap {
         CGEvent.tapEnable(tap: port, enable: true)
         tapPort = port
         runLoopSource = source
+        RibbonLog.log("input tap started", category: "input")
     }
 
     func stop() {
@@ -72,8 +70,12 @@ final class InputTap {
     fileprivate func handleEvent(type: CGEventType, event: CGEvent) {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            if let port = tapPort {
-                CGEvent.tapEnable(tap: port, enable: true)
+            guard let port = tapPort else { return }
+            CGEvent.tapEnable(tap: port, enable: true)
+            RibbonLog.log("input tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")", category: "input")
+            // Events are dropped while the tap is disabled; a released button means the mouse-up was one of them.
+            if !CGEventSource.buttonState(.combinedSessionState, button: .left) {
+                delegate?.mouseUp()
             }
         case .leftMouseUp:
             delegate?.mouseUp()
@@ -86,9 +88,8 @@ final class InputTap {
             let dy = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
             let phaseRaw = UInt32(truncatingIfNeeded: event.getIntegerValueField(.scrollWheelEventScrollPhase))
             let momentumRaw = UInt32(truncatingIfNeeded: event.getIntegerValueField(.scrollWheelEventMomentumPhase))
-            let phase = CGScrollPhase(rawValue: phaseRaw) ?? .changed
             let momentum = CGMomentumScrollPhase(rawValue: momentumRaw) ?? .none
-            delegate?.scrolled(dx: dx, dy: dy, phase: phase, momentum: momentum)
+            delegate?.scrolled(dx: dx, dy: dy, phase: CGScrollPhase(rawValue: phaseRaw), momentum: momentum)
         case gestureEventType:
             delegate?.gesture(event)
         default:
