@@ -8,7 +8,8 @@ final class PanController {
     /// Pointer travel below this many points pans nothing, so caps chords with a resting hand stay still.
     private static let deadZone: Double = 40
     private static let idleTimeoutNs: UInt64 = 300_000_000
-    /// Caps holds expire after 10s so a lost `modifier caps up` cannot leave pointer motion panning.
+    /// Caps holds expire 10s after the down (outside a pan) so a lost `modifier caps up` cannot
+    /// leave pointer motion panning.
     private static let holdTimeoutNs: UInt64 = 10_000_000_000
 
     private weak var windowManager: WindowManager?
@@ -41,6 +42,15 @@ final class PanController {
         guard abs(accumulatedDX) >= Self.deadZone else { return }
 
         let sID = wm.panningSpaceID ?? wm.currentActiveSpaceID()
+        if !isPanning, let columns = wm.ribbons[sID]?.columns {
+            // Cancelling replays deferred AX events, which edit the ribbon, so it runs before the
+            // ribbon is read.
+            let spaceWindowIDs = Set(columns.flatMap { $0.windows.map(\.id) })
+            for id in spaceWindowIDs where wm.scrollAnimator.isAnimating(id) {
+                wm.lastAppliedFrames.removeValue(forKey: id)
+            }
+            wm.scrollAnimator.cancel(windowIDs: spaceWindowIDs)
+        }
         guard var r = wm.ribbons[sID], !r.columns.isEmpty else { return }
         let dID = wm.displayBySpaceID[sID] ?? wm.activeDisplayID ?? NSScreen.main?.displayID ?? 0
         guard let screen = wm.screen(forDisplayID: dID) else { return }
@@ -53,11 +63,6 @@ final class PanController {
             flushCount = 0
             wm.panningSpaceID = sID
             r.isOverview = false
-            let spaceWindowIDs = Set(r.columns.flatMap { $0.windows.map(\.id) })
-            for id in spaceWindowIDs where wm.scrollAnimator.isAnimating(id) {
-                wm.lastAppliedFrames.removeValue(forKey: id)
-            }
-            wm.scrollAnimator.cancel(windowIDs: spaceWindowIDs)
             RibbonLog.log("pan started space=\(sID) offset=\(Int(r.viewportOffset))", category: "pan")
         }
 
@@ -139,6 +144,7 @@ final class PanController {
 
     private func expireHoldIfNeeded() -> Bool {
         guard let wm = windowManager, wm.capsHeld else { return true }
+        if isPanning { return false }
         if let downAt = wm.capsDownAt,
            DispatchTime.now().uptimeNanoseconds - downAt.uptimeNanoseconds < Self.holdTimeoutNs {
             return false

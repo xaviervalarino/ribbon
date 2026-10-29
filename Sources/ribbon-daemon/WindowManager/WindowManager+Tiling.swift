@@ -96,6 +96,8 @@ extension WindowManager {
     /// `animated` slides moving windows instead of jumping them (command-driven scrolls).
     public func retile(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false, quiet: Bool = false) {
         guard !isDisplayReconfiguring else { return }
+        // A pan writes positions every flush; a slide there would be retargeted every 8ms.
+        let animated = animated && panningSpaceID == nil
         guard !NSScreen.screens.isEmpty else { return }
         // In AppKit, (0, 0) is at the bottom-left of the primary display.
         // The primary display's height serves as the universal Y-axis reflection plane.
