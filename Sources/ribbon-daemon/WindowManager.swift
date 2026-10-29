@@ -102,6 +102,7 @@ public final class WindowManager {
     private var lastSampledDisplaySnapshot: DisplaySnapshot?
     private var screenParametersObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
+    private var screensWakeObserver: NSObjectProtocol?
     var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     var lastStashedState: [CGWindowID: Bool] = [:]
     var lastNaturalFrames: [CGWindowID: CGRect] = [:]
@@ -245,6 +246,15 @@ public final class WindowManager {
             self?.displayConfigurationChanged()
         }
 
+        // A display link stops ticking while its display sleeps; waking it posts no reconfiguration.
+        screensWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scrollAnimator.displaysChanged()
+        }
+
         retileNow()
     }
 
@@ -334,6 +344,10 @@ public final class WindowManager {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             wakeObserver = nil
         }
+        if let obs = screensWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+            screensWakeObserver = nil
+        }
         observer.stop()
 
         if !forRestart {
@@ -382,12 +396,14 @@ public final class WindowManager {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        scrollAnimator.displaysChanged()
     }
 
     func displayConfigurationChanged() {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        scrollAnimator.displaysChanged()
 
         displaySamplingCount = 0
         lastSampledDisplaySnapshot = nil
