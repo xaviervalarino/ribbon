@@ -93,10 +93,6 @@ extension WindowManager: AXEventObserverDelegate {
             dropNativeTab(tabID)
             return
         }
-        if let pendingID = pendingNewWindows.first(where: { CFEqual($0.value.element.rawElement, element.rawElement) })?.key {
-            pendingNewWindows.removeValue(forKey: pendingID)
-            return
-        }
         guard let id = trackedWindowID(for: element) else { return }
 
         // Closing a shown tab shows another tab of its group, which takes over the slot.
