@@ -60,6 +60,35 @@ extension WindowManager {
         retile(allSpaces: allSpaces, focusWindowID: focusWindowID, animated: animated)
     }
 
+    /// A failed AX write leaves the window where it was: its cached frame is dropped and a retile
+    /// 500ms later writes it again, at most `maxWriteRetries` times in a row. After that the cache
+    /// keeps the frame, so a hung app is not hammered with writes it cannot answer.
+    func writeFailed(id: CGWindowID, frame: CGRect, error: AXError) {
+        // A newer plan already replaced the failed frame, and its own write reports separately.
+        guard lastAppliedFrames[id] == frame else { return }
+
+        let maxWriteRetries = 3
+        let now = DispatchTime.now()
+        var retry = writeRetries[id] ?? (count: 0, last: now)
+        // Failures 10s apart are unrelated, so each starts a fresh run of retries.
+        if now > retry.last + .seconds(10) { retry.count = 0 }
+        retry.count += 1
+        retry.last = now
+        writeRetries[id] = retry
+        guard retry.count <= maxWriteRetries else {
+            RibbonLog.log("AX write retries exhausted wid=\(id) err=\(error.rawValue)", category: "layout")
+            return
+        }
+
+        lastAppliedFrames.removeValue(forKey: id)
+        RibbonLog.log("AX write retry \(retry.count)/\(maxWriteRetries) wid=\(id) err=\(error.rawValue)", category: "layout")
+        DispatchQueue.main.asyncAfter(deadline: now + .milliseconds(500)) { [weak self] in
+            // A sliding window's final write reports for itself; a retile now would restart the slide.
+            guard let self, !self.scrollAnimator.isAnimating(id) else { return }
+            self.scheduleRetile()
+        }
+    }
+
     // MARK: - Layout & Retile
 
     /// Recomputes and applies layouts. `focusWindowID` is focused by its AppDriver

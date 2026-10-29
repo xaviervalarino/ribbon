@@ -270,6 +270,7 @@ extension WindowManager {
         lastAppliedFrames.removeValue(forKey: id)
         lastStashedState.removeValue(forKey: id)
         lastNaturalFrames.removeValue(forKey: id)
+        writeRetries.removeValue(forKey: id)
         adoptedSinceLastSweep.remove(id)
         dropOrderedOut(id)
 
