@@ -353,6 +353,11 @@ func runTests() {
     TestRunner.assertEqual(stacked2.columns[1].activeRowIndex, 0, "An inactive slot leaves the active row")
     TestRunner.assertEqual(stacked2.activeColumnIndex, 0, "An inactive slot leaves the active column")
 
+    // 13. Browser extension pop-outs float by title
+    TestRunner.assertTrue(Config().floats(title: "Extension: (Bitwarden Password Manager) - Bitwarden"), "Bitwarden pop-out floats")
+    TestRunner.assertTrue(Config().floats(title: "extension: (uBlock Origin)"), "Pattern matches case-insensitively")
+    TestRunner.assertFalse(Config().floats(title: "Bitwarden Web Vault - Zen"), "A browser tab titled Bitwarden still tiles")
+
     guard TestRunner.summary() else {
         exit(1)
     }
