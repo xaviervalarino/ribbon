@@ -94,6 +94,21 @@ public final class WindowManager {
     var resizeDebounceWork: DispatchWorkItem?
     var isDisplayReconfiguring: Bool = false
     var dragDirty = false
+    var capsHeld = false
+    var capsDownAt: DispatchTime?
+    struct TouchesProbeState {
+        var isArmed = false
+        var bucketTimer: DispatchSourceTimer?
+        var endWork: DispatchWorkItem?
+        var lastTouchCount = 0
+        var lastMeanX: Double?
+        var maxTouches = 0
+        var events = 0
+        var dx = 0.0
+        var swipes = 0
+        var swipeDX = 0.0
+    }
+    var touchesProbe = TouchesProbeState()
     var displaySamplingTimer: DispatchSourceTimer?
     var displaySamplingCount: Int = 0
 
@@ -331,6 +346,10 @@ public final class WindowManager {
         retileWork = nil
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
+        touchesProbe.bucketTimer?.cancel()
+        touchesProbe.bucketTimer = nil
+        touchesProbe.endWork?.cancel()
+        touchesProbe.endWork = nil
         displaySamplingTimer?.cancel()
         displaySamplingTimer = nil
         if let obs = screenParametersObserver {

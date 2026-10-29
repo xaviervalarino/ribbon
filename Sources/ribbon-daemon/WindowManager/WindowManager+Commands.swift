@@ -146,6 +146,18 @@ extension WindowManager {
                 return debugInspect(appFilter: args.dropFirst().first)
             case "settings":
                 return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
+            case "touches":
+                guard args.count == 2 else { return "error: usage: debug touches on|off" }
+                switch args[1].lowercased() {
+                case "on":
+                    setTouchesProbe(true)
+                    return "ok"
+                case "off":
+                    setTouchesProbe(false)
+                    return "ok"
+                default:
+                    return "error: usage: debug touches on|off"
+                }
             default:
                 break
             }
@@ -196,6 +208,21 @@ extension WindowManager {
             ribbon.barf()
         case "toggle-overview", "overview":
             ribbon.toggleOverview()
+        case "modifier":
+            guard parts.count == 3, parts[1].lowercased() == "caps" else {
+                return "error: usage: modifier caps down|up"
+            }
+            switch parts[2].lowercased() {
+            case "down":
+                capsHeld = true
+                capsDownAt = .now()
+            case "up":
+                capsHeld = false
+                capsDownAt = nil
+            default:
+                return "error: usage: modifier caps down|up"
+            }
+            return "ok"
         case "focus-display":
             let screens = NSScreen.screens
             guard screens.count > 1 else { return "ok" }

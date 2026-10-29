@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 
 private let gestureEventType = CGEventType(rawValue: 29)!
+private let swipeEventType = CGEventType(rawValue: 31)!
 
 protocol InputTapDelegate: AnyObject {
     func mouseUp()
@@ -9,6 +10,7 @@ protocol InputTapDelegate: AnyObject {
     /// `phase` is nil for a wheel tick, which carries no scroll phase.
     func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase)
     func gesture(_ event: CGEvent)
+    func swipe(_ event: CGEvent)
 }
 
 private let inputTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -23,10 +25,23 @@ final class InputTap {
     private var tapPort: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var loggedUnavailable = false
+    private var gestureMonitoring = false
 
     /// Only events with a delegate consumer are in the mask: every masked event wakes the main
     /// run loop, and a backed-up port drops events (a lost mouse-up included).
-    private let events: [CGEventType] = [.leftMouseUp]
+    private var events: [CGEventType] {
+        var list: [CGEventType] = [.leftMouseUp]
+        if gestureMonitoring {
+            list.append(contentsOf: [gestureEventType, swipeEventType])
+        }
+        return list
+    }
+
+    func setGestureMonitoring(_ on: Bool) {
+        guard on != gestureMonitoring else { return }
+        gestureMonitoring = on
+        start()
+    }
 
     func start() {
         stop()
@@ -92,6 +107,8 @@ final class InputTap {
             delegate?.scrolled(dx: dx, dy: dy, phase: CGScrollPhase(rawValue: phaseRaw), momentum: momentum)
         case gestureEventType:
             delegate?.gesture(event)
+        case swipeEventType:
+            delegate?.swipe(event)
         default:
             break
         }
