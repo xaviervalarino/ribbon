@@ -12,7 +12,8 @@ guard !arguments.isEmpty else {
       ribbon shrink <left|right> [step]
       ribbon align <left|center|right>
       ribbon cycle-width (alias: cycle)
-      ribbon toggle-overview (alias: overview [mission-control])
+      ribbon toggle-overview (alias: overview)
+      ribbon overview mission-control
       ribbon mission-control
       ribbon focus-display [next|prev|<index>]
       ribbon move-to-display [next|prev|<index>]

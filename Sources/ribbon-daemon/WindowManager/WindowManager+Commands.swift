@@ -210,11 +210,19 @@ extension WindowManager {
             guard let dir = parts.dropFirst().first?.lowercased(), dir == "left" || dir == "right" else {
                 return "error: unknown \(action) direction"
             }
-            let step = (parts.count > 2 ? Double(parts[2]) : nil) ?? config.widthStep
+            var step = config.widthStep
+            if parts.count > 2 {
+                guard let parsed = Double(parts[2]), parsed > 0 else {
+                    return "error: \(action) step must be a positive number"
+                }
+                step = parsed
+            }
             let appliedDelta = ribbon.adjustWidth(by: action == "grow" ? step : -step)
-            // The left variants keep the column's right edge in place by scrolling with the change.
+            // The left variants keep the column's right edge in place by scrolling with the change;
+            // a column against the canvas's left edge has no room to scroll and grows rightward.
             if dir == "left", let canvasW = canvasWidth(forSpace: sID) {
-                ribbon.viewportOffset = max(0.0, ribbon.viewportOffset + appliedDelta * canvasW)
+                // Column widths scale with the canvas plus one gap (see columnGeometry).
+                ribbon.viewportOffset = max(0.0, ribbon.viewportOffset + appliedDelta * (canvasW + config.windowGap))
             }
         case "align":
             ribbon.isOverview = false
@@ -321,17 +329,15 @@ extension WindowManager {
         retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: true)
 
         if openMissionControlAfterRetile {
+            // A command that left overview before the slide settled cancels the launch.
+            let launch = { [weak self] in
+                guard let self, self.ribbons[sID]?.isOverview == true else { return }
+                self.launchMissionControl()
+            }
             if scrollAnimator.isActive {
-                let originalOnIdle = scrollAnimator.onIdle
-                scrollAnimator.onIdle = { [weak self] in
-                    originalOnIdle?()
-                    self?.scrollAnimator.onIdle = originalOnIdle
-                    self?.launchMissionControl()
-                }
+                scrollAnimator.onNextIdle = launch
             } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
-                    self?.launchMissionControl()
-                }
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50), execute: launch)
             }
         }
 

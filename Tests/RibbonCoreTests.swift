@@ -326,6 +326,12 @@ func runTests() {
     TestRunner.assertEqual(singleExplicitRibbon.columns[0].widthRatio, 1.0, "Single column ratio grows to 1.0")
     TestRunner.assertFalse(singleExplicitRibbon.columns[0].hasExplicitSingleWidth, "Single column grow to 1.0 clears hasExplicitSingleWidth")
 
+    var autoExpandedRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 604, pid: 1, title: "Auto", appName: "App1")], widthRatio: 0.5)
+    ], activeColumnIndex: 0)
+    TestRunner.assertEqual(autoExpandedRibbon.adjustWidth(by: 0.1), 0.0, "Growing an auto-expanded lone column applies nothing")
+    TestRunner.assertEqual(autoExpandedRibbon.columns[0].widthRatio, 0.5, "Auto-expanded lone column keeps its stored ratio")
+
     // 13. alignedOffset left, center, right, and short-strip clamp (C.2)
     let alignConfig = Config(windowGap: 0, edgeMargin: 0)
     let c2Ribbon = Ribbon(columns: [
