@@ -309,8 +309,9 @@ extension WindowManager {
     }
 
     /// Pins a sliding window at the stash sliver of each stashed end while its strip position
-    /// lies beyond it. A top/bottom stash (the side edge is shared with another display) leaves
-    /// the strip's row, so the window swaps to it while its strip position lies half past `display`'s edge.
+    /// lies beyond it. A stash at the opposite side edge or at the top/bottom (its own side edge
+    /// is shared with another display) is off the window's path, so the window swaps to it while
+    /// its strip position lies half past `display`'s edge.
     private func slideParking(
         from parkedFrom: CGRect?,
         fromNatural: CGPoint,
@@ -321,7 +322,9 @@ extension WindowManager {
         var parking = ScrollAnimator.Parking()
         func pin(_ parked: CGRect?, natural: CGPoint) {
             guard let parked else { return }
-            guard abs(parked.minY - natural.y) < 0.5 else {
+            let onPath = abs(parked.minY - natural.y) < 0.5
+                && display.map { (parked.midX < $0.midX) == (natural.x + parked.width / 2 < $0.midX) } ?? true
+            guard onPath else {
                 // Half past the edge is where macOS takes the window, matching the layout's rule.
                 guard let display else { return }
                 let half = parked.width / 2
