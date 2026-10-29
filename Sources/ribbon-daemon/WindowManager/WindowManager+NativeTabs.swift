@@ -28,6 +28,8 @@ extension WindowManager {
     /// How long a closed tab's slot waits for its group's next tab to show.
     var closedTabHoldMs: Double { 300 }
 
+    var nowMs: Double { CACurrentMediaTime() * 1000 }
+
     /// Swaps each tiled window of `pids` that is ordered out for its group's shown tab, hides an
     /// ordered-out window while its app shows another window, and adopts a hidden tab shown
     /// without a slot. Hiding and adopting wait until the state has held for `tabConfirmMs`;
@@ -74,23 +76,25 @@ extension WindowManager {
         guard !liveIDs.isEmpty else { return }
 
         let visibleSpaces = Set(SpaceManager.currentTopology().activeSpaceByDisplay.values)
-        let now = CACurrentMediaTime() * 1000
+        let now = nowMs
         var changed = false
+
+        // An ordered-out window starts over when it dies.
+        tabStates = tabStates.filter { id, state in
+            if case .orderedOut = state { return liveIDs.contains(id) }
+            return true
+        }
 
         for pid in pids.sorted() {
             guard let app = NSRunningApplication(processIdentifier: pid), !app.isHidden else { continue }
 
             for id in hiddenTabIDs(pid: pid) where !liveIDs.contains(id) {
-                dropTabState(id)
+                tabStates[id] = nil
             }
 
             let tiledIDs = allRibbonWindows.filter { $0.pid == pid }.map(\.id)
-            // A window moved to another space reports only that space; it is not a tab.
-            let offTiled = tiledIDs.filter { id in
-                guard liveIDs.contains(id), !onScreen.contains(id),
-                      let sID = spaceByWindowID[id], visibleSpaces.contains(sID) else { return false }
-                let spaces = SpaceManager.spaceIDs(for: id)
-                return spaces.isEmpty || spaces.contains(where: visibleSpaces.contains)
+            let offTiled = tiledIDs.filter {
+                liveIDs.contains($0) && isOrderedOutOnVisibleSpace($0, onScreen: onScreen, visibleSpaces: visibleSpaces)
             }.sorted()
             let pidTabs = hiddenTabIDs(pid: pid)
             let shownTabs = pidTabs.filter(onScreen.contains)
@@ -102,10 +106,9 @@ extension WindowManager {
                 }
             }
 
-            // An ordered-out window starts over when it shows again or dies.
-            tabStates = tabStates.filter { id, state in
-                guard case .orderedOut = state else { return true }
-                return liveIDs.contains(id) && (!tiledIDs.contains(id) || offTiled.contains(id))
+            // An ordered-out window starts over when it shows again.
+            for id in tiledIDs where !offTiled.contains(id) {
+                dropOrderedOut(id)
             }
 
             var placed = Set<CGWindowID>()
@@ -124,8 +127,8 @@ extension WindowManager {
                 } : nil
                 let new = frameMatch ?? sizeMatch
 
-                if let new, let tab = hiddenTab(new) {
-                    if swapTab(out: old, in: new, element: tab.element, pid: pid, focus: focus) {
+                if let new, let element = hiddenTabElement(new) {
+                    if swapTab(out: old, in: new, element: element, pid: pid, focus: focus) {
                         placed.insert(new)
                         changed = true
                     }
@@ -153,10 +156,13 @@ extension WindowManager {
                     tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: firstSeen)
                 }
                 guard now - firstSeen >= tabConfirmMs else { continue }
-                dropTabState(id)
+                // `adopt` refuses a hidden tab, so the state goes first and returns if adopt fails.
+                tabStates[id] = nil
                 if adopt(element: element, pid: pid, activate: id == focus) {
                     RibbonLog.log("native tab adopted as window wid=\(id) pid=\(pid)", category: "tabs")
                     changed = true
+                } else {
+                    tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: firstSeen)
                 }
             }
         }
@@ -200,7 +206,7 @@ extension WindowManager {
             tabStates[old] = .hidden(element: oldElement, pid: pid, shownSinceMs: nil)
         }
 
-        dropTabState(new)
+        tabStates[new] = nil
         trackedWindows[new] = element
         windowIDsByElement[element.rawElement] = new
         spaceByWindowID[new] = sID
@@ -229,16 +235,6 @@ extension WindowManager {
         RibbonLog.log("native tab hidden wid=\(id) pid=\(pid) spaces=\(SpaceManager.spaceIDs(for: id))", category: "tabs")
     }
 
-    /// Holds a new window that opened at a tiled sibling's frame as a hidden tab; the reconcile
-    /// passes give it its group's slot once macOS orders the sibling out.
-    func holdTabCandidate(_ element: AXElement, id: CGWindowID, sibling: CGWindowID, pid: pid_t, focus: CGWindowID?) {
-        let frame = serverFrame(id).map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
-        RibbonLog.log("native tab candidate wid=\(id) sibling=\(sibling) frame=\(frame)", category: "tabs")
-        tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: nil)
-        observer.observeWindow(element: element, pid: pid)
-        scheduleTabReconcile(pid: pid, focus: focus)
-    }
-
     /// Keeps a closed tab's slot until its group's next tab shows, for up to `closedTabHoldMs`, and
     /// returns false when no hidden tab shares the slot's x and width (the group had one tab). The
     /// slot has no element meanwhile, so retiles skip it: the next tab may still be ordered out, and
@@ -253,7 +249,7 @@ extension WindowManager {
         if let element = trackedWindows.removeValue(forKey: id) {
             windowIDsByElement.removeValue(forKey: element.rawElement)
         }
-        tabStates[id] = .closedSlot(pid: pid, frame: frame, sinceMs: CACurrentMediaTime() * 1000)
+        tabStates[id] = .closedSlot(pid: pid, frame: frame, sinceMs: nowMs)
         if !fillClosedTabSlot(id, shown: nil) {
             pollClosedTabSlot(id)
         }
@@ -287,9 +283,9 @@ extension WindowManager {
                 onScreen.contains(id) && (frames[id]?.isSameColumn(held.frame) ?? false)
             }
         }
-        guard let new = candidate, let tab = hiddenTab(new) else { return false }
-        dropTabState(slot)
-        if swapTab(out: slot, in: new, element: tab.element, pid: held.pid, focus: shown) {
+        guard let new = candidate, let element = hiddenTabElement(new) else { return false }
+        tabStates[slot] = nil
+        if swapTab(out: slot, in: new, element: element, pid: held.pid, focus: shown) {
             scheduleTabReconcile(pid: held.pid)
         } else {
             removeFromRibbon(id: slot)
@@ -302,11 +298,11 @@ extension WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
             guard let self, !self.isStopped, let held = self.closedSlot(id) else { return }
             if self.fillClosedTabSlot(id, shown: nil) { return }
-            guard CACurrentMediaTime() * 1000 - held.sinceMs >= self.closedTabHoldMs else {
+            guard self.nowMs - held.sinceMs >= self.closedTabHoldMs else {
                 self.pollClosedTabSlot(id)
                 return
             }
-            self.dropTabState(id)
+            self.tabStates[id] = nil
             self.removeFromRibbon(id: id)
             self.forgetOriginalFrame(id: id)
             self.scheduleRetile()
@@ -334,23 +330,23 @@ extension WindowManager {
     }
 
     /// Gives a new window its group's slot when it is a native tab: at once when the sibling has
-    /// ordered out, else held until the reconcile sees it do so. False for an ordinary window,
-    /// which the caller adopts.
+    /// ordered out, else held as a hidden tab until the reconcile passes see it do so. False for
+    /// an ordinary window, which the caller adopts.
     func claimNewTab(_ element: AXElement, id: CGWindowID, pid: pid_t, focus: CGWindowID?) -> Bool {
         // A tab its focus event already claimed holds a slot; claiming it again would move it.
         guard trackedWindows[id] == nil, !isHiddenTab(id),
               let sibling = tabSibling(of: id, pid: pid) else { return false }
-        settleNewTab(element, id: id, sibling: sibling, pid: pid, focus: focus)
-        return true
-    }
-
-    private func settleNewTab(_ element: AXElement, id: CGWindowID, sibling: (id: CGWindowID, orderedOut: Bool), pid: pid_t, focus: CGWindowID?) {
         if sibling.orderedOut, swapTab(out: sibling.id, in: id, element: element, pid: pid, focus: focus) {
             scheduleTabReconcile(pid: pid)
             scheduleRetile()
-        } else {
-            holdTabCandidate(element, id: id, sibling: sibling.id, pid: pid, focus: focus)
+            return true
         }
+        let frame = serverFrame(id)?.logDescription ?? "none"
+        RibbonLog.log("native tab candidate wid=\(id) sibling=\(sibling.id) frame=\(frame)", category: "tabs")
+        tabStates[id] = .hidden(element: element, pid: pid, shownSinceMs: nil)
+        observer.observeWindow(element: element, pid: pid)
+        scheduleTabReconcile(pid: pid, focus: focus)
+        return true
     }
 
     /// The tiled window that new window `id` is a tab of. Showing a new tab orders its group's shown
@@ -368,12 +364,9 @@ extension WindowManager {
 
         let appHidden = NSRunningApplication(processIdentifier: pid)?.isHidden ?? true
         let visibleSpaces = Set(SpaceManager.currentTopology().activeSpaceByDisplay.values)
-        // A window moved to another space reports only that space; it is not ordered out.
         let orderedOut: [(id: CGWindowID, frame: CGRect)] = appHidden ? [] : tiled.compactMap { tiledID in
-            guard !onScreen.contains(tiledID), let sID = spaceByWindowID[tiledID], visibleSpaces.contains(sID),
-                  let tiledFrame = frames[tiledID] else { return nil }
-            let spaces = SpaceManager.spaceIDs(for: tiledID)
-            guard spaces.isEmpty || spaces.contains(where: visibleSpaces.contains) else { return nil }
+            guard let tiledFrame = frames[tiledID],
+                  isOrderedOutOnVisibleSpace(tiledID, onScreen: onScreen, visibleSpaces: visibleSpaces) else { return nil }
             return (tiledID, tiledFrame)
         }
 
@@ -388,16 +381,23 @@ extension WindowManager {
         }
 
         if !orderedOut.isEmpty {
-            let format = { (r: CGRect) in "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))" }
-            let out = orderedOut.map { "\($0.id):\(format($0.frame))" }.joined(separator: ", ")
-            RibbonLog.log("native tab check wid=\(id) frame=\(frame.map(format) ?? "none") no sibling among ordered out [\(out)]", category: "tabs")
+            let out = orderedOut.map { "\($0.id):\($0.frame.logDescription)" }.joined(separator: ", ")
+            RibbonLog.log("native tab check wid=\(id) frame=\(frame?.logDescription ?? "none") no sibling among ordered out [\(out)]", category: "tabs")
         }
         return nil
     }
 
-    func hiddenTab(_ id: CGWindowID) -> (element: AXElement, pid: pid_t)? {
-        guard case let .hidden(element, pid, _) = tabStates[id] else { return nil }
-        return (element, pid)
+    /// True for a window that is off screen while its space is visible. A window moved to another
+    /// space reports only that space; it is not ordered out.
+    private func isOrderedOutOnVisibleSpace(_ id: CGWindowID, onScreen: Set<CGWindowID>, visibleSpaces: Set<SpaceID>) -> Bool {
+        guard !onScreen.contains(id), let sID = spaceByWindowID[id], visibleSpaces.contains(sID) else { return false }
+        let spaces = SpaceManager.spaceIDs(for: id)
+        return spaces.isEmpty || spaces.contains(where: visibleSpaces.contains)
+    }
+
+    func hiddenTabElement(_ id: CGWindowID) -> AXElement? {
+        guard case let .hidden(element, _, _) = tabStates[id] else { return nil }
+        return element
     }
 
     func isHiddenTab(_ id: CGWindowID) -> Bool {
@@ -405,11 +405,23 @@ extension WindowManager {
         return false
     }
 
-    func hiddenTabID(for element: AXElement) -> CGWindowID? {
-        tabStates.first { _, state in
+    /// Drops the hidden tab whose element is `element`; false when none matches. A destroyed
+    /// element no longer answers its window ID, so it matches by element.
+    @discardableResult
+    func dropHiddenTab(for element: AXElement) -> Bool {
+        let match = tabStates.first { _, state in
             guard case let .hidden(tabElement, _, _) = state else { return false }
             return CFEqual(tabElement.rawElement, element.rawElement)
-        }?.key
+        }
+        guard let id = match?.key else { return false }
+        tabStates[id] = nil
+        return true
+    }
+
+    func dropOrderedOut(_ id: CGWindowID) {
+        if case .orderedOut = tabStates[id] {
+            tabStates[id] = nil
+        }
     }
 
     /// The pid's hidden tabs in ascending window ID order.
@@ -424,10 +436,6 @@ extension WindowManager {
         guard case let .closedSlot(pid, frame, sinceMs) = tabStates[id] else { return nil }
         return (pid, frame, sinceMs)
     }
-
-    func dropTabState(_ id: CGWindowID) {
-        tabStates.removeValue(forKey: id)
-    }
 }
 
 extension CGSize {
@@ -438,6 +446,11 @@ extension CGSize {
 }
 
 extension CGRect {
+    /// "x,y WxH" in whole points, for logs.
+    var logDescription: String {
+        "\(Int(minX)),\(Int(minY)) \(Int(width))x\(Int(height))"
+    }
+
     /// True when origin x and width each differ from `other` by at most 2pt. A tab group's frame
     /// keeps its x and width as tabs come and go; a tab bar showing can change its height.
     func isSameColumn(_ other: CGRect) -> Bool {

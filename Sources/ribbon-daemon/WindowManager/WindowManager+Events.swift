@@ -77,11 +77,7 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func windowDestroyed(element: AXElement, pid: pid_t) {
-        // A destroyed element no longer answers its window ID, so hidden tabs match by element.
-        if let tabID = hiddenTabID(for: element) {
-            dropTabState(tabID)
-            return
-        }
+        if dropHiddenTab(for: element) { return }
         guard let id = trackedWindowID(for: element) else { return }
 
         // Closing a shown tab shows another tab of its group, which takes over the slot and its
@@ -104,9 +100,7 @@ extension WindowManager: AXEventObserverDelegate {
     public func windowDeminiaturized(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
         // A minimize can read as ordered out and hide the window as a tab; it returns as a window.
-        if let tabID = hiddenTabID(for: element) {
-            dropTabState(tabID)
-        }
+        dropHiddenTab(for: element)
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         }

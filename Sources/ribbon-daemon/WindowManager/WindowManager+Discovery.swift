@@ -269,9 +269,7 @@ extension WindowManager {
         lastStashedState.removeValue(forKey: id)
         lastNaturalFrames.removeValue(forKey: id)
         adoptedSinceLastSweep.remove(id)
-        if case .orderedOut = tabStates[id] {
-            tabStates.removeValue(forKey: id)
-        }
+        dropOrderedOut(id)
 
         for sID in ribbons.keys {
             ribbons[sID]?.removeWindow(id: id)
@@ -335,9 +333,7 @@ extension WindowManager {
         lastStashedState.removeValue(forKey: id)
         lastNaturalFrames.removeValue(forKey: id)
         displayByWindowID.removeValue(forKey: id)
-        if case .orderedOut = tabStates[id] {
-            tabStates.removeValue(forKey: id)
-        }
+        dropOrderedOut(id)
         if let sID = spaceByWindowID.removeValue(forKey: id) {
             ribbons[sID]?.removeWindow(id: id)
         } else {
