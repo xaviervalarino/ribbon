@@ -94,6 +94,8 @@ public final class WindowManager {
     var resizeDebounceWork: DispatchWorkItem?
     var isDisplayReconfiguring: Bool = false
     var dragDirty = false
+    var draggingWindowID: CGWindowID?
+    var spaceChangeDeferred = false
     var displaySamplingTimer: DispatchSourceTimer?
     var displaySamplingCount: Int = 0
 

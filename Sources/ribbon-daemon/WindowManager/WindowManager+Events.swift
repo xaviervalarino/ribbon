@@ -14,6 +14,16 @@ extension WindowManager {
             displayBySpaceID[sID] = dID
         }
 
+        // Space changes during a drag defer reconciliation and retiling until mouse-up.
+        if inputTap.isRunning && CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            dragDirty = true
+            if !spaceChangeDeferred {
+                spaceChangeDeferred = true
+                RibbonLog.log("space change deferred to drag end", category: "drag")
+            }
+            return
+        }
+
         reconcileWindows(sortHorizontally: false)
         syncFocusToFrontmostWindow()
 
@@ -154,6 +164,10 @@ extension WindowManager: AXEventObserverDelegate {
                     lastAppliedFrames.removeValue(forKey: id)
                     let isDragging = CGEventSource.buttonState(.combinedSessionState, button: .left)
                     if isDragging {
+                        if draggingWindowID != id {
+                            RibbonLog.log("drag started wid=\(id)", category: "drag")
+                            draggingWindowID = id
+                        }
                         dragDirty = true
                     } else {
                         scheduleRetile()
@@ -167,6 +181,10 @@ extension WindowManager: AXEventObserverDelegate {
         // but avoid fighting the mouse cursor mid-drag.
         lastAppliedFrames.removeValue(forKey: id)
         if CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            if draggingWindowID != id {
+                RibbonLog.log("drag started wid=\(id)", category: "drag")
+                draggingWindowID = id
+            }
             dragDirty = true
         }
     }
@@ -336,8 +354,15 @@ extension WindowManager: AXEventObserverDelegate {
 
 extension WindowManager: InputTapDelegate {
     func mouseUp() {
+        draggingWindowID = nil
         guard dragDirty else { return }
         dragDirty = false
+        if spaceChangeDeferred {
+            spaceChangeDeferred = false
+            handleActiveSpaceDidChange()
+            return
+        }
+        RibbonLog.log("drag ended: retile", category: "drag")
         // An edge drag that moved the origin also resized: retiling before the resize debounce
         // measures the new width writes the old width back and the debounce then sees no change.
         if resizeDebounceWork != nil {

@@ -159,6 +159,11 @@ extension WindowManager {
         let slideMs = config.scrollAnimationMs
 
         for entry in frames {
+            // The window under the mouse is placed at mouse-up.
+            if entry.id == draggingWindowID && inputTap.isRunning {
+                continue
+            }
+
             var elem = trackedWindows[entry.id]
             if elem == nil {
                 let appElem = AXElement.application(pid: entry.pid)

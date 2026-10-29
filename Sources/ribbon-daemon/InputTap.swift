@@ -24,6 +24,9 @@ final class InputTap {
     private var runLoopSource: CFRunLoopSource?
     private var loggedUnavailable = false
 
+    /// Mouse-up only arrives while the tap runs; drag state that waits for it checks this first.
+    var isRunning: Bool { tapPort != nil }
+
     /// Only events with a delegate consumer are in the mask: every masked event wakes the main
     /// run loop, and a backed-up port drops events (a lost mouse-up included).
     private let events: [CGEventType] = [.leftMouseUp]
