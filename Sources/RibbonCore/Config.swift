@@ -45,6 +45,7 @@ public struct Config: Sendable, Codable {
     public var scrollAnimationMs: Int
     public var resizeMode: ResizeMode
     public var focusTiming: FocusTiming
+    public var overviewColumnsPerRow: Int
 
     public init(
         windowGap: Double = 4.0,
@@ -79,7 +80,8 @@ public struct Config: Sendable, Codable {
         spaceChangeDebounceMs: Int = 25,
         scrollAnimationMs: Int = 55,
         resizeMode: ResizeMode = .end,
-        focusTiming: FocusTiming = .end
+        focusTiming: FocusTiming = .end,
+        overviewColumnsPerRow: Int = 3
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -94,6 +96,7 @@ public struct Config: Sendable, Codable {
         self.scrollAnimationMs = scrollAnimationMs
         self.resizeMode = resizeMode
         self.focusTiming = focusTiming
+        self.overviewColumnsPerRow = overviewColumnsPerRow
     }
 
     public static let `default` = Config()
