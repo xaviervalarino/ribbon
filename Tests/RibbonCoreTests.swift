@@ -333,6 +333,11 @@ func runTests() {
     let narrowGeometry: [(x: Double, width: Double)] = [(x: 0, width: 400), (x: 410, width: 400), (x: 820, width: 400)]
     TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: narrowGeometry, offset: 0, canvasWidth: 1500, activeIndex: 2), 2,
                            "A fully visible active column keeps focus")
+    let fourGeometry: [(x: Double, width: Double)] = [(x: 0, width: 400), (x: 410, width: 400), (x: 820, width: 400), (x: 1230, width: 400)]
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: fourGeometry, offset: 700, canvasWidth: 1000, activeIndex: 0), 2,
+                           "The fully visible column nearest the active one wins")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 1215, canvasWidth: 1500, activeIndex: 9), 2,
+                           "An out-of-range active index clamps to the last column")
     TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: [], offset: 0, canvasWidth: 1500, activeIndex: 0), nil,
                            "No columns, no target")
 
