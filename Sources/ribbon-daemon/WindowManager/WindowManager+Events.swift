@@ -89,8 +89,9 @@ extension WindowManager: AXEventObserverDelegate {
         if !siblings.isEmpty {
             let onScreen = onScreenWindowIDs() ?? []
             let lastFrame = lastAppliedFrames[id]
+            let frames = serverFrames(pid: pid)
             let frameMatch = siblings.first { sibling in
-                guard let lastFrame, let frame = serverFrame(sibling) else { return false }
+                guard let lastFrame, let frame = frames[sibling] else { return false }
                 return frame.isNear(lastFrame)
             }
             // Any other sibling may belong to another group of the app; a frame write would move that group.

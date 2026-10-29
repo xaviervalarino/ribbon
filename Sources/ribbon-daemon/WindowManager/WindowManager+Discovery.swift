@@ -39,6 +39,20 @@ extension WindowManager {
         return CGRect(dictionaryRepresentation: bounds)
     }
 
+    /// WindowServer frames of the app's windows, ordered-out ones included: `serverFrame` returns
+    /// nil for a window that is ordered out, such as a hidden native tab.
+    func serverFrames(pid: pid_t) -> [CGWindowID: CGRect] {
+        guard let list = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [NSDictionary] else { return [:] }
+        var frames: [CGWindowID: CGRect] = [:]
+        for dict in list where (dict[kCGWindowOwnerPID as String] as? NSNumber)?.int32Value == pid {
+            guard let num = dict[kCGWindowNumber as String] as? NSNumber,
+                  let bounds = dict[kCGWindowBounds as String] as? NSDictionary,
+                  let rect = CGRect(dictionaryRepresentation: bounds) else { continue }
+            frames[num.uint32Value] = rect
+        }
+        return frames
+    }
+
     /// The app's front-most on-screen normal window, from WindowServer's front-to-back order.
     func frontmostWindowID(pid: pid_t) -> CGWindowID? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [NSDictionary] else {

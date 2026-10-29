@@ -219,15 +219,19 @@ extension WindowManager {
         // A tab its focus event already claimed holds a slot; claiming it again would move it.
         guard trackedWindows[id] == nil, nativeTabs[id] == nil else { return false }
         if pendingNewWindows[id] != nil { return true }
-        if let sibling = tabSibling(of: id, frame: serverFrame(id) ?? element.frame, pid: pid) {
+        if let sibling = tabSibling(of: id, pid: pid) {
             settleNewTab(element, id: id, sibling: sibling, pid: pid, focus: focus)
             return true
         }
         guard focus != nil, allRibbonWindows.contains(where: { $0.pid == pid }) else { return false }
         pendingNewWindows[id] = (element: element, pid: pid, focus: focus, sinceMs: CACurrentMediaTime() * 1000)
         let format = { (r: CGRect) in "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))" }
-        let tiled = allRibbonWindows.filter { $0.pid == pid }.map { "\($0.id):\(serverFrame($0.id).map(format) ?? "none")" }
-        RibbonLog.log("new window wid=\(id) frame=\(element.frame.map(format) ?? "none") waits; app tiles [\(tiled.joined(separator: ", "))]", category: "tabs")
+        let frames = serverFrames(pid: pid)
+        let onScreen = onScreenWindowIDs() ?? []
+        let tiled = allRibbonWindows.filter { $0.pid == pid }.map {
+            "\($0.id):\(frames[$0.id].map(format) ?? "none")\(onScreen.contains($0.id) ? "" : " out")"
+        }
+        RibbonLog.log("new window wid=\(id) frame=\(frames[id].map(format) ?? "none") waits; app tiles [\(tiled.joined(separator: ", "))]", category: "tabs")
         pollNewWindow(id)
         return true
     }
@@ -252,8 +256,7 @@ extension WindowManager {
                 self.pendingNewWindows.removeValue(forKey: id)
                 return
             }
-            // WindowServer's frame: an AX read waits behind the app creating the tab.
-            if let sibling = self.tabSibling(of: id, frame: self.serverFrame(id), pid: pending.pid) {
+            if let sibling = self.tabSibling(of: id, pid: pending.pid) {
                 self.pendingNewWindows.removeValue(forKey: id)
                 RibbonLog.log("native tab wid=\(id) sibling=\(sibling.id) orderedOut=\(sibling.orderedOut) after \(waitedMs)ms", category: "tabs")
                 self.settleNewTab(pending.element, id: id, sibling: sibling, pid: pending.pid, focus: pending.focus)
@@ -282,16 +285,18 @@ extension WindowManager {
     /// window at another frame, or a tiled window at the same frame within 2pt, makes the new window
     /// a candidate that the reconcile settles; Ribbon writes nothing to it meanwhile. Otherwise the
     /// window is ordinary: macOS cascades a genuine new window to a different origin.
-    func tabSibling(of id: CGWindowID, frame: CGRect?, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
+    func tabSibling(of id: CGWindowID, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
         let tiled = Set(allRibbonWindows.filter { $0.pid == pid && $0.id != id }.map(\.id)).sorted()
         guard !tiled.isEmpty, let onScreen = onScreenWindowIDs() else { return nil }
+        let frames = serverFrames(pid: pid)
+        let frame = frames[id]
 
         let appHidden = NSRunningApplication(processIdentifier: pid)?.isHidden ?? true
         let visibleSpaces = Set(SpaceManager.currentTopology().activeSpaceByDisplay.values)
         // A window moved to another space reports only that space; it is not ordered out.
         let orderedOut: [(id: CGWindowID, frame: CGRect)] = appHidden ? [] : tiled.compactMap { tiledID in
             guard !onScreen.contains(tiledID), let sID = spaceByWindowID[tiledID], visibleSpaces.contains(sID),
-                  let tiledFrame = serverFrame(tiledID) else { return nil }
+                  let tiledFrame = frames[tiledID] else { return nil }
             let spaces = SpaceManager.spaceIDs(for: tiledID)
             guard spaces.isEmpty || spaces.contains(where: visibleSpaces.contains) else { return nil }
             return (tiledID, tiledFrame)
@@ -303,7 +308,7 @@ extension WindowManager {
         if orderedOut.count == 1 {
             return (orderedOut[0].id, false)
         }
-        if let frame, let match = tiled.first(where: { serverFrame($0)?.isNear(frame) ?? false }) {
+        if let frame, let match = tiled.first(where: { frames[$0]?.isNear(frame) ?? false }) {
             return (match, false)
         }
 
