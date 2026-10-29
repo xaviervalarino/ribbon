@@ -182,6 +182,33 @@ public struct LayoutEngine: Sendable {
         return result
     }
 
+    /// The column a released pan focuses. A column fully on the canvas wins, the one nearest the
+    /// active column, so the snap leaves the strip where the pan put it; when none fits, the most
+    /// visible column wins (the active one on a tie) and the snap scrolls it into view.
+    public static func panSnapColumn(
+        geometry: [(x: Double, width: Double)],
+        offset: Double,
+        canvasWidth: Double,
+        activeIndex: Int
+    ) -> Int? {
+        guard !geometry.isEmpty else { return nil }
+        let active = max(0, min(activeIndex, geometry.count - 1))
+        func visibleWidth(_ index: Int) -> Double {
+            let left = max(0, geometry[index].x - offset)
+            let right = min(canvasWidth, geometry[index].x - offset + geometry[index].width)
+            return max(0, right - left)
+        }
+        let fullyVisible = geometry.indices.filter { visibleWidth($0) >= geometry[$0].width - 1 }
+        if let nearest = fullyVisible.min(by: { abs($0 - active) < abs($1 - active) }) {
+            return nearest
+        }
+        var best = active
+        for index in geometry.indices where visibleWidth(index) > visibleWidth(best) {
+            best = index
+        }
+        return best
+    }
+
     /// Scrolls just enough to show the active column, then further when a column would sit half or
     /// more past a shared display edge, so that edge falls between columns. Past the strip's end
     /// that leaves empty canvas.
