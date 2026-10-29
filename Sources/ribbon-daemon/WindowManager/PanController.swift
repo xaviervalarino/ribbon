@@ -2,15 +2,15 @@ import Foundation
 import AppKit
 import CoreGraphics
 
-/// Pans the active Space's strip horizontally while Caps Lock is held, flushing position
-/// updates at most every 8ms and snapping to the most visible column when caps is released.
+/// Pans the active Space's strip horizontally while a pan is held (`pan begin` to `pan end`), flushing position
+/// updates at most every 8ms and snapping to the most visible column when the hold ends.
 final class PanController {
-    /// Pointer travel below this many points pans nothing, so caps chords with a resting hand stay still.
+    /// Pointer travel below this many points pans nothing, so key chords with a resting hand stay still.
     private static let deadZone: Double = 40
     /// Motion after a pause this long starts the dead zone over, so slow drift never adds up to a pan.
     private static let idleTimeoutNs: UInt64 = 300_000_000
-    /// Caps holds expire 10s after the down, or 10s after a pan's last motion, so a lost
-    /// `modifier caps up` cannot leave pointer motion panning.
+    /// Holds expire 10s after `pan begin`, or 10s after a pan's last motion, so a lost `pan end`
+    /// cannot leave pointer motion panning.
     private static let holdTimeoutNs: UInt64 = 10_000_000_000
 
     private weak var windowManager: WindowManager?
@@ -144,16 +144,16 @@ final class PanController {
     }
 
     private func expireHoldIfNeeded() -> Bool {
-        guard let wm = windowManager, wm.capsHeld else { return true }
-        // A pan lasts until caps up, so pauses mid-pan leave the strip where the pointer put it.
-        let holdStart = isPanning ? lastMotionTime : wm.capsDownAt
+        guard let wm = windowManager, wm.panHeld else { return true }
+        // A pan lasts until `pan end`, so pauses mid-pan leave the strip where the pointer put it.
+        let holdStart = isPanning ? lastMotionTime : wm.panHeldSince
         if let holdStart, DispatchTime.now().uptimeNanoseconds - holdStart.uptimeNanoseconds < Self.holdTimeoutNs {
             return false
         }
-        wm.capsHeld = false
-        wm.capsDownAt = nil
+        wm.panHeld = false
+        wm.panHeldSince = nil
         wm.inputTap.setPointerMonitoring(false)
-        RibbonLog.log("caps hold expired", category: "pan")
+        RibbonLog.log("pan hold expired", category: "pan")
         endPan(snap: true)
         return true
     }

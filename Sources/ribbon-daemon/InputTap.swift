@@ -27,7 +27,7 @@ final class InputTap {
     private var loggedUnavailable = false
     private var gestureMonitoring = false
     private var pointerMonitoring = false
-    /// While caps is held the cursor stays where caps went down and mouse motion only pans: each
+    /// While a pan is held the cursor stays where the hold began and mouse motion only pans: each
     /// move warps it back. A warp holds off local mouse events for the suppression interval;
     /// 0.07s is the shortest that still holds the cursor still, and the default 0.25s would stall
     /// it after release.

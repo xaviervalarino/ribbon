@@ -94,8 +94,8 @@ public final class WindowManager {
     var resizeDebounceWork: DispatchWorkItem?
     var isDisplayReconfiguring: Bool = false
     var dragDirty = false
-    var capsHeld = false
-    var capsDownAt: DispatchTime?
+    var panHeld = false
+    var panHeldSince: DispatchTime?
     var panningSpaceID: SpaceID?
     lazy var panController = PanController(windowManager: self)
     struct TouchesProbeState {

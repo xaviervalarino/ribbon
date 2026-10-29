@@ -14,7 +14,7 @@ guard !arguments.isEmpty else {
       ribbon move-to-display [next|prev|<index>]
       ribbon slurp
       ribbon barf
-      ribbon modifier caps <down|up>
+      ribbon pan <begin|end>
       ribbon debug touches <on|off>
       ribbon retile
       ribbon rescan
