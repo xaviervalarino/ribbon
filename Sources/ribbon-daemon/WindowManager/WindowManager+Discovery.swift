@@ -134,6 +134,7 @@ extension WindowManager {
                 if let onScreen, !onScreen.contains(id), SpaceManager.spaceIDs(for: id).isEmpty {
                     if trackedWindows[id] == nil {
                         tabStates[id] = .hidden(element: win, pid: app.processIdentifier, shownSinceMs: nil)
+                        observer.observeWindow(element: win, pid: app.processIdentifier)
                     }
                     continue
                 }
@@ -377,9 +378,10 @@ extension WindowManager {
             }
         }
 
-        // Also prune originalFrames of dead windows
+        // Also prune originalFrames of dead windows. A held closed-tab slot keeps its frame for the
+        // group's next tab.
         let deadOriginals = originalFrames.keys.filter {
-            !liveIDs.contains($0) && !adoptedSinceLastSweep.contains($0)
+            !liveIDs.contains($0) && !adoptedSinceLastSweep.contains($0) && closedSlot($0) == nil
         }
         if !deadOriginals.isEmpty {
             for id in deadOriginals {

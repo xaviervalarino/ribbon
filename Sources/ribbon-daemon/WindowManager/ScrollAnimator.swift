@@ -80,6 +80,8 @@ final class ScrollAnimator: @unchecked Sendable {
     private static let deadLinkMs = 250
     /// How late a link check may run before it counts as a main-thread stall rather than a check.
     private static let stalledCheckMs = 50.0
+    /// Wait before a link that looks silent is dropped.
+    private static let confirmSilentMs = 20
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
@@ -248,6 +250,20 @@ final class ScrollAnimator: @unchecked Sendable {
                 self.watchLink(resume: resume, since: startMs)
                 return
             }
+            self.confirmLinkSilent(resume: resume, since: startMs, lastTick: self.lastTickMs)
+        }
+    }
+
+    /// A stall that began just after a frame can still look like silence on time; a live link's
+    /// queued frame runs before this second look.
+    private func confirmLinkSilent(resume: Int, since startMs: Double, lastTick: Double?) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.confirmSilentMs)) { [weak self] in
+            guard let self, resume == self.linkResumes, self.isActive, self.displayLink != nil else { return }
+            guard self.lastTickMs == lastTick else {
+                self.watchLink(resume: resume, since: startMs)
+                return
+            }
+            let silentMs = Self.nowMs() - (lastTick ?? startMs)
             RibbonLog.log("display link silent \(Int(silentMs))ms; using timer", category: "slide")
             self.linkWentSilent = true
             self.dropDisplayLink()
