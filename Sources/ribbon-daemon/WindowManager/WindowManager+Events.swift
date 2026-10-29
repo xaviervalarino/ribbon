@@ -95,26 +95,11 @@ extension WindowManager: AXEventObserverDelegate {
         }
         guard let id = trackedWindowID(for: element) else { return }
 
-        // Closing a shown tab shows another tab of its group, which takes over the slot.
-        let siblings = nativeTabIDs(pid: pid).filter { $0 != id }
-        if !siblings.isEmpty {
-            let onScreen = onScreenWindowIDs() ?? []
-            let lastFrame = lastAppliedFrames[id]
-            let frames = serverFrames(pid: pid)
-            let frameMatch = siblings.first { sibling in
-                guard let lastFrame, let frame = frames[sibling] else { return false }
-                return frame.isNear(lastFrame)
-            }
-            // Any other sibling may belong to another group of the app; a frame write would move that group.
-            if let replacement = siblings.first(where: onScreen.contains) ?? frameMatch,
-               let tab = nativeTabs[replacement],
-               swapTab(out: id, in: replacement, element: tab.element, pid: pid) {
-                dropNativeTab(id)
-                forgetOriginalFrame(id: id)
-                scheduleTabReconcile(pid: pid)
-                scheduleRetile()
-                return
-            }
+        // Closing a shown tab shows another tab of its group, which takes over the slot once shown.
+        if nativeTabIDs(pid: pid).contains(where: { $0 != id }) {
+            forgetOriginalFrame(id: id)
+            holdClosedTabSlot(id, pid: pid)
+            return
         }
 
         removeFromRibbon(id: id)
@@ -261,6 +246,7 @@ extension WindowManager: AXEventObserverDelegate {
 
         // A tab switch focuses a hidden tab: it takes over its group's slot, never a new column.
         if nativeTabs[id] != nil {
+            fillClosedTabSlot(pid: pid, shown: id)
             reconcileNativeTabs(pids: [pid], focus: id)
             if spaceByWindowID[id] == nil {
                 scheduleTabReconcile(pid: pid, focus: id)
