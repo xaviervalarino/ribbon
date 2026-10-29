@@ -3,13 +3,14 @@ import AppKit
 import CoreGraphics
 
 /// Pans the active Space's strip horizontally while Caps Lock is held, flushing position
-/// updates at most every 8ms and snapping to the most visible column when the pan ends.
+/// updates at most every 8ms and snapping to the most visible column when caps is released.
 final class PanController {
     /// Pointer travel below this many points pans nothing, so caps chords with a resting hand stay still.
     private static let deadZone: Double = 40
+    /// Motion after a pause this long starts the dead zone over, so slow drift never adds up to a pan.
     private static let idleTimeoutNs: UInt64 = 300_000_000
-    /// Caps holds expire 10s after the down (outside a pan) so a lost `modifier caps up` cannot
-    /// leave pointer motion panning.
+    /// Caps holds expire 10s after the down, or 10s after a pan's last motion, so a lost
+    /// `modifier caps up` cannot leave pointer motion panning.
     private static let holdTimeoutNs: UInt64 = 10_000_000_000
 
     private weak var windowManager: WindowManager?
@@ -144,9 +145,9 @@ final class PanController {
 
     private func expireHoldIfNeeded() -> Bool {
         guard let wm = windowManager, wm.capsHeld else { return true }
-        if isPanning { return false }
-        if let downAt = wm.capsDownAt,
-           DispatchTime.now().uptimeNanoseconds - downAt.uptimeNanoseconds < Self.holdTimeoutNs {
+        // A pan lasts until caps up, so pauses mid-pan leave the strip where the pointer put it.
+        let holdStart = isPanning ? lastMotionTime : wm.capsDownAt
+        if let holdStart, DispatchTime.now().uptimeNanoseconds - holdStart.uptimeNanoseconds < Self.holdTimeoutNs {
             return false
         }
         wm.capsHeld = false
@@ -186,11 +187,6 @@ final class PanController {
             needsFlush = false
             flushCount += 1
             wm.retileNow(animated: false, quiet: true)
-        }
-        let elapsedNs = DispatchTime.now().uptimeNanoseconds - lastMotionTime.uptimeNanoseconds
-        if elapsedNs >= Self.idleTimeoutNs,
-           !CGEventSource.buttonState(.combinedSessionState, button: .left) {
-            endPan(snap: true)
         }
     }
 }
