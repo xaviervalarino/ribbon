@@ -357,20 +357,23 @@ extension WindowManager: InputTapDelegate {
         draggingWindowID = nil
         guard dragDirty else { return }
         dragDirty = false
-        if spaceChangeDeferred {
-            spaceChangeDeferred = false
-            handleActiveSpaceDidChange()
-            return
+        let spaceChanged = spaceChangeDeferred
+        spaceChangeDeferred = false
+        RibbonLog.log("drag ended: \(spaceChanged ? "space change" : "retile")", category: "drag")
+        let finish = { [weak self] in
+            guard let self else { return }
+            if spaceChanged {
+                self.handleActiveSpaceDidChange()
+            } else {
+                self.scheduleRetile()
+            }
         }
-        RibbonLog.log("drag ended: retile", category: "drag")
         // An edge drag that moved the origin also resized: retiling before the resize debounce
         // measures the new width writes the old width back and the debounce then sees no change.
         if resizeDebounceWork != nil {
-            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200)) { [weak self] in
-                self?.scheduleRetile()
-            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200), execute: finish)
         } else {
-            scheduleRetile()
+            finish()
         }
     }
 
