@@ -284,10 +284,7 @@ extension WindowManager {
         // A hidden tab joins only through its group's slot (reconcileNativeTabs).
         guard let id = element.windowID, nativeTabs[id] == nil else { return false }
 
-        if originalFrames[id] == nil, let frame = element.frame, frame.width > 50 && frame.height > 50 {
-            originalFrames[id] = frame
-            persistOriginalFrames()
-        }
+        rememberOriginalFrame(id: id, element: element)
 
         let sID = upsertWindow(
             win: element,
@@ -318,6 +315,12 @@ extension WindowManager {
                 ribbons[sID]?.removeWindow(id: id)
             }
         }
+    }
+
+    func rememberOriginalFrame(id: CGWindowID, element: AXElement) {
+        guard originalFrames[id] == nil, let frame = element.frame, frame.width > 50 && frame.height > 50 else { return }
+        originalFrames[id] = frame
+        persistOriginalFrames()
     }
 
     func forgetOriginalFrame(id: CGWindowID) {

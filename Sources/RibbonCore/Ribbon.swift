@@ -271,7 +271,7 @@ public struct Ribbon: Sendable, Codable {
         guard slot(of: id) != nil else { return false }
         let activeID = activeWindow?.id
         let wasActive = activeID == id || activeID == window.id
-        if window.id != id, slot(of: window.id) != nil {
+        if window.id != id {
             removeWindow(id: window.id)
         }
         guard let (cIdx, rIdx) = slot(of: id) else { return false }

@@ -52,9 +52,8 @@ extension WindowManager {
         for pid in pids.sorted() {
             guard let app = NSRunningApplication(processIdentifier: pid), !app.isHidden else { continue }
 
-            for id in nativeTabs.keys where nativeTabs[id]?.pid == pid && !liveIDs.contains(id) {
-                nativeTabs.removeValue(forKey: id)
-                strayTabs.remove(id)
+            for id in nativeTabIDs(pid: pid) where !liveIDs.contains(id) {
+                dropNativeTab(id)
             }
 
             let tiledIDs = allRibbonWindows.filter { $0.pid == pid }.map(\.id)
@@ -65,12 +64,11 @@ extension WindowManager {
                 let spaces = SpaceManager.spaceIDs(for: id)
                 return spaces.isEmpty || spaces.contains(where: visibleSpaces.contains)
             }.sorted()
-            let shownTabs = nativeTabs.keys.filter { nativeTabs[$0]?.pid == pid && onScreen.contains($0) }.sorted()
+            let pidTabs = nativeTabIDs(pid: pid)
+            let shownTabs = pidTabs.filter(onScreen.contains)
 
             // A tab marked stray on an earlier pass and hidden since starts over.
-            for id in strayTabs where nativeTabs[id]?.pid == pid && !shownTabs.contains(id) {
-                strayTabs.remove(id)
-            }
+            strayTabs.subtract(pidTabs.filter { !onScreen.contains($0) })
 
             // A window seen ordered out once starts over when it shows again or dies.
             hideCandidates = hideCandidates.filter { liveIDs.contains($0) && (!tiledIDs.contains($0) || offTiled.contains($0)) }
@@ -81,7 +79,7 @@ extension WindowManager {
                 let oldSize = boundsByID[old]?.size
                 let new = candidates.first { candidate in
                     guard let oldSize, let size = boundsByID[candidate]?.size else { return false }
-                    return abs(size.width - oldSize.width) <= 2 && abs(size.height - oldSize.height) <= 2
+                    return size.isNear(oldSize)
                 } ?? candidates.first
 
                 if let new, let tab = nativeTabs[new] {
@@ -102,8 +100,7 @@ extension WindowManager {
             for id in shownTabs where !placed.contains(id) {
                 guard let tab = nativeTabs[id] else { continue }
                 if strayTabs.contains(id) {
-                    nativeTabs.removeValue(forKey: id)
-                    strayTabs.remove(id)
+                    dropNativeTab(id)
                     if adopt(element: tab.element, pid: pid, activate: id == focus) {
                         RibbonLog.log("native tab adopted as window wid=\(id) pid=\(pid)", category: "tabs")
                         changed = true
@@ -123,10 +120,10 @@ extension WindowManager {
     /// directly: `upsertWindow` re-derives the space and can move the window to another ribbon.
     @discardableResult
     func swapTab(out old: CGWindowID, in new: CGWindowID, element: AXElement, pid: pid_t, focus: CGWindowID? = nil) -> Bool {
-        let foundSID = spaceByWindowID[old] ?? ribbons.first(where: { entry in
+        let slotSID = spaceByWindowID[old] ?? ribbons.first(where: { entry in
             entry.value.columns.contains { $0.windows.contains { $0.id == old } }
         })?.key
-        guard let sID = foundSID, var r = ribbons[sID] else { return false }
+        guard let sID = slotSID, var r = ribbons[sID] else { return false }
 
         let oldModel = r.columns.lazy.flatMap(\.windows).first { $0.id == old }
         let app = NSRunningApplication(processIdentifier: pid)
@@ -150,18 +147,14 @@ extension WindowManager {
             nativeTabs[old] = (element: oldElement, pid: pid)
         }
 
-        nativeTabs.removeValue(forKey: new)
-        strayTabs.remove(new)
+        dropNativeTab(new)
         trackedWindows[new] = element
         windowIDsByElement[element.rawElement] = new
         spaceByWindowID[new] = sID
         if let dID {
             displayByWindowID[new] = dID
         }
-        if originalFrames[new] == nil, let frame = element.frame, frame.width > 50 && frame.height > 50 {
-            originalFrames[new] = frame
-            persistOriginalFrames()
-        }
+        rememberOriginalFrame(id: new, element: element)
         observer.observeWindow(element: element, pid: pid)
         adoptedSinceLastSweep.insert(new)
 
@@ -194,13 +187,27 @@ extension WindowManager {
         guard let frame = element.frame else { return nil }
         let ownID = cachedWindowID(for: element)
         let candidates = allRibbonWindows.filter { $0.pid == pid && $0.id != ownID }.map(\.id).sorted()
-        for id in candidates {
-            guard let tiled = serverFrame(id) else { continue }
-            if abs(tiled.minX - frame.minX) <= 2, abs(tiled.minY - frame.minY) <= 2,
-               abs(tiled.width - frame.width) <= 2, abs(tiled.height - frame.height) <= 2 {
-                return id
-            }
+        return candidates.first { id in
+            guard let tiled = serverFrame(id) else { return false }
+            return abs(tiled.minX - frame.minX) <= 2 && abs(tiled.minY - frame.minY) <= 2
+                && tiled.size.isNear(frame.size)
         }
-        return nil
+    }
+
+    /// The pid's hidden tabs in ascending window ID order.
+    func nativeTabIDs(pid: pid_t) -> [CGWindowID] {
+        nativeTabs.filter { $0.value.pid == pid }.keys.sorted()
+    }
+
+    func dropNativeTab(_ id: CGWindowID) {
+        nativeTabs.removeValue(forKey: id)
+        strayTabs.remove(id)
+    }
+}
+
+extension CGSize {
+    /// True when both dimensions differ from `other` by at most 2pt.
+    func isNear(_ other: CGSize) -> Bool {
+        abs(width - other.width) <= 2 && abs(height - other.height) <= 2
     }
 }

@@ -83,27 +83,25 @@ extension WindowManager: AXEventObserverDelegate {
     public func windowDestroyed(element: AXElement, pid: pid_t) {
         // A destroyed element no longer answers its window ID, so hidden tabs match by element.
         if let tabID = nativeTabs.first(where: { CFEqual($0.value.element.rawElement, element.rawElement) })?.key {
-            nativeTabs.removeValue(forKey: tabID)
-            strayTabs.remove(tabID)
+            dropNativeTab(tabID)
             return
         }
         guard let id = trackedWindowID(for: element) else { return }
 
         // Closing a shown tab shows another tab of its group, which takes over the slot.
-        let siblings = nativeTabs.keys.filter { $0 != id && nativeTabs[$0]?.pid == pid }.sorted()
+        let siblings = nativeTabIDs(pid: pid).filter { $0 != id }
         if !siblings.isEmpty {
             let onScreen = onScreenWindowIDs() ?? []
             let lastSize = lastAppliedFrames[id]?.size
             let sizeMatch = siblings.first { sibling in
                 guard let lastSize, let size = serverFrame(sibling)?.size else { return false }
-                return abs(size.width - lastSize.width) <= 2 && abs(size.height - lastSize.height) <= 2
+                return size.isNear(lastSize)
             }
             // Any other sibling may belong to another group of the app; a frame write would move that group.
             if let replacement = siblings.first(where: onScreen.contains) ?? sizeMatch,
                let tab = nativeTabs[replacement],
                swapTab(out: id, in: replacement, element: tab.element, pid: pid) {
-                nativeTabs.removeValue(forKey: id)
-                strayTabs.remove(id)
+                dropNativeTab(id)
                 forgetOriginalFrame(id: id)
                 scheduleTabReconcile(pid: pid)
                 scheduleRetile()
@@ -362,9 +360,8 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func applicationTerminated(pid: pid_t) {
         removeAppDriver(for: pid)
-        for id in nativeTabs.keys where nativeTabs[id]?.pid == pid {
-            nativeTabs.removeValue(forKey: id)
-            strayTabs.remove(id)
+        for id in nativeTabIDs(pid: pid) {
+            dropNativeTab(id)
         }
         let matchingIDs = Set(allRibbonWindows.filter { $0.pid == pid }.map { $0.id })
         for id in matchingIDs {
