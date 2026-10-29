@@ -34,7 +34,7 @@ public final class AXEventObserver {
     /// Apps whose observation failed at least once; windows they create before it succeeds send nothing.
     private var failedObservePids: Set<pid_t> = []
     private var isRunning: Bool = false
-    private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0]
+    private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0, 4.0]
     /// Returns true while main-thread handlers must wait (a scroll slide is running): their AX
     /// reads block on busy apps and would freeze the slide's frames.
     public var shouldDeferEvents: (() -> Bool)?
@@ -262,6 +262,7 @@ public final class AXEventObserver {
         let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         let error = AXObserverCreate(pid, callback, &observer)
         guard error == .success, let obs = observer else {
+            failedObservePids.insert(pid)
             retryLater()
             return
         }
@@ -276,13 +277,16 @@ public final class AXEventObserver {
 
         for notif in notifications {
             let result = AXObserverAddNotification(obs, appElement, notif as CFString, refcon)
-            guard result == .success || notif != kAXWindowCreatedNotification else {
-                // A just-launched app answers cannotComplete until its AX is up; an observer
-                // without window creation would never see its windows, so it is dropped and retried.
+            // A just-launched app answers cannotComplete until its AX is up; an observer without
+            // window creation never sees its windows, so it is dropped and retried. After the last
+            // retry it is kept for the notifications that did register (focus still adopts).
+            if result != .success, notif == kAXWindowCreatedNotification {
                 RibbonLog.log("AX observe failed pid=\(pid) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
                 failedObservePids.insert(pid)
-                retryLater()
-                return
+                if attempt < Self.retryDelays.count {
+                    retryLater()
+                    return
+                }
             }
         }
 
@@ -290,7 +294,14 @@ public final class AXEventObserver {
         observers[pid] = obs
         if failedObservePids.remove(pid) != nil {
             RibbonLog.log("AX observe succeeded late pid=\(pid) attempt=\(attempt)", category: "discovery")
-            delegate?.applicationEventOccurred(kind: .observedLate, pid: pid)
+            // Callers include discovery and tiling loops, so the sweep runs on a later turn, held
+            // like other app events while a slide runs.
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isRunning else { return }
+                self.runOrDefer(key: "observedLate-\(pid)", label: "observedLate", pid: pid) { [weak self] in
+                    self?.delegate?.applicationEventOccurred(kind: .observedLate, pid: pid)
+                }
+            }
         }
 
         if let pending = pendingWindowRegistrations.removeValue(forKey: pid) {

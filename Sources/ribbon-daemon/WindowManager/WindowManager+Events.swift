@@ -53,13 +53,7 @@ private struct MainThreadRef: @unchecked Sendable {
 extension WindowManager: AXEventObserverDelegate {
     public func windowCreated(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
-        let adopted = adopt(element: element, pid: pid, activate: isFrontmost)
-        RibbonLog.log(
-            "window created wid=\(element.windowID.map(String.init) ?? "?") pid=\(pid) role=\(element.role)"
-            + " subrole=\(element.subrole) frontmost=\(isFrontmost) adopted=\(adopted)",
-            category: "discovery"
-        )
-        if adopted {
+        if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         } else if isFrontmost {
             DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50)) { [weak self] in
