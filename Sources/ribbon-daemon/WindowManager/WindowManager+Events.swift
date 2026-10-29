@@ -88,16 +88,12 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func windowDestroyed(element: AXElement, pid: pid_t) {
-        // A destroyed element no longer answers its window ID, so hidden tabs match by element.
-        if let tabID = nativeTabs.first(where: { CFEqual($0.value.element.rawElement, element.rawElement) })?.key {
-            dropNativeTab(tabID)
-            return
-        }
+        if dropHiddenTab(for: element) { return }
         guard let id = trackedWindowID(for: element) else { return }
 
-        // Closing a shown tab shows another tab of its group, which takes over the slot once shown.
+        // Closing a shown tab shows another tab of its group, which takes over the slot and its
+        // restore frame once shown.
         if holdClosedTabSlot(id, pid: pid) {
-            forgetOriginalFrame(id: id)
             return
         }
 
@@ -115,9 +111,7 @@ extension WindowManager: AXEventObserverDelegate {
     public func windowDeminiaturized(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
         // A minimize can read as ordered out and hide the window as a tab; it returns as a window.
-        if let tabID = nativeTabs.first(where: { CFEqual($0.value.element.rawElement, element.rawElement) })?.key {
-            dropNativeTab(tabID)
-        }
+        dropHiddenTab(for: element)
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         }
@@ -126,7 +120,7 @@ extension WindowManager: AXEventObserverDelegate {
     public func windowResized(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
         // A hidden tab follows its group's frame; its resize is not a manual one.
-        guard let id = trackedWindowID(for: element), nativeTabs[id] == nil else { return }
+        guard let id = trackedWindowID(for: element), !isHiddenTab(id) else { return }
 
         // WindowServer bounds trail the app's resize notification by 8-13ms, so a size read here
         // can be the pre-resize size. Any resize inside Ribbon's own echo window is ours, and a
@@ -171,7 +165,7 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowMoved(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
-        guard let id = trackedWindowID(for: element), nativeTabs[id] == nil else { return }
+        guard let id = trackedWindowID(for: element), !isHiddenTab(id) else { return }
 
         let now = observer.currentEventTime
         // WindowServer bounds trail the app's move notification, so inside Ribbon's own echo
@@ -244,7 +238,7 @@ extension WindowManager: AXEventObserverDelegate {
         }
 
         // A tab switch focuses a hidden tab: it takes over its group's slot, never a new column.
-        if nativeTabs[id] != nil {
+        if isHiddenTab(id) {
             fillClosedTabSlot(pid: pid, shown: id)
             reconcileNativeTabs(pids: [pid], focus: id)
             if spaceByWindowID[id] == nil {
@@ -376,11 +370,15 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func applicationTerminated(pid: pid_t) {
         removeAppDriver(for: pid)
-        for id in nativeTabIDs(pid: pid) {
-            dropNativeTab(id)
-        }
-        closedTabSlots = closedTabSlots.filter { $0.value.pid != pid }
         let matchingIDs = Set(allRibbonWindows.filter { $0.pid == pid }.map { $0.id })
+        tabStates = tabStates.filter { id, state in
+            switch state {
+            case let .hidden(_, tabPID, _), let .closedSlot(tabPID, _, _):
+                return tabPID != pid
+            case .orderedOut:
+                return !matchingIDs.contains(id)
+            }
+        }
         for id in matchingIDs {
             trackedWindows.removeValue(forKey: id)
             lastAppliedFrames.removeValue(forKey: id)

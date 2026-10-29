@@ -82,7 +82,7 @@ extension WindowManager {
 
     func discoverExistingWindows() {
         reconcileWindows(sortHorizontally: true)
-        // Hidden tabs are live windows, so discovery tiles them; collapse each group into one slot.
+        // A hidden tab that reports a space is tiled by discovery; collapse each group into one slot.
         reconcileNativeTabs(pids: Set(allRibbonWindows.map(\.pid)), confirmHides: false)
         syncFocusToFrontmostWindow()
         retile(allSpaces: true)
@@ -108,6 +108,8 @@ extension WindowManager {
             }
         }
 
+        let onScreen = onScreenWindowIDs()
+
         var discovered: [(
             win: AXElement,
             id: CGWindowID,
@@ -126,8 +128,16 @@ extension WindowManager {
 
             let appElem = AXElement.application(pid: app.processIdentifier)
             for win in appElem.windows {
-                guard admits(win), let id = win.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { continue }
+                guard admits(win), let id = win.windowID, !isHiddenTab(id) else { continue }
                 if !allLiveIDs.isEmpty && !allLiveIDs.contains(id) { continue }
+                // A hidden native tab is ordered out and reports no space; it joins only through its
+                // group's slot or the stray pass.
+                if let onScreen, !onScreen.contains(id), SpaceManager.spaceIDs(for: id).isEmpty {
+                    if trackedWindows[id] == nil {
+                        tabStates[id] = .hidden(element: win, pid: app.processIdentifier, shownSinceMs: nil)
+                    }
+                    continue
+                }
 
                 let frame = win.frame ?? .zero
                 if originalFrames[id] == nil, frame.width > 50 && frame.height > 50 {
@@ -261,7 +271,7 @@ extension WindowManager {
         lastNaturalFrames.removeValue(forKey: id)
         writeRetries.removeValue(forKey: id)
         adoptedSinceLastSweep.remove(id)
-        hideCandidates.removeValue(forKey: id)
+        dropOrderedOut(id)
 
         for sID in ribbons.keys {
             ribbons[sID]?.removeWindow(id: id)
@@ -298,9 +308,8 @@ extension WindowManager {
               let appName = app.localizedName,
               !config.ignoredApps.contains(appName) else { return false }
         guard admits(element) else { return false }
-        // A hidden tab joins only through its group's slot (reconcileNativeTabs), and a new window
-        // waiting to learn whether it is a tab only through its wait (claimNewTab).
-        guard let id = element.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { return false }
+        // A hidden tab joins only through its group's slot (reconcileNativeTabs).
+        guard let id = element.windowID, !isHiddenTab(id) else { return false }
 
         rememberOriginalFrame(id: id, element: element)
 
@@ -326,7 +335,7 @@ extension WindowManager {
         lastStashedState.removeValue(forKey: id)
         lastNaturalFrames.removeValue(forKey: id)
         displayByWindowID.removeValue(forKey: id)
-        hideCandidates.removeValue(forKey: id)
+        dropOrderedOut(id)
         if let sID = spaceByWindowID.removeValue(forKey: id) {
             ribbons[sID]?.removeWindow(id: id)
         } else {
@@ -363,7 +372,7 @@ extension WindowManager {
         let currentIDs = allRibbonWindows.map(\.id)
         for id in currentIDs {
             // A closed tab's slot waits for its group's next tab (holdClosedTabSlot).
-            if adoptedSinceLastSweep.contains(id) || closedTabSlots[id] != nil { continue }
+            if adoptedSinceLastSweep.contains(id) || closedSlot(id) != nil { continue }
             if !liveIDs.contains(id) {
                 removeFromRibbon(id: id)
                 removedAny = true
@@ -386,7 +395,11 @@ extension WindowManager {
         }
         adoptedSinceLastSweep.removeAll()
 
-        let tabPIDs = Set(allRibbonWindows.map(\.pid)).union(nativeTabs.values.map(\.pid))
+        let hiddenPIDs = tabStates.values.compactMap { state -> pid_t? in
+            guard case let .hidden(_, pid, _) = state else { return nil }
+            return pid
+        }
+        let tabPIDs = Set(allRibbonWindows.map(\.pid)).union(hiddenPIDs)
         reconcileNativeTabs(pids: tabPIDs, windowList: windowList)
     }
 }
