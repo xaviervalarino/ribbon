@@ -551,6 +551,21 @@ func runTests() {
     TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: [], offset: 0, canvasWidth: 1500, activeIndex: 0), nil,
                            "No columns, no target")
 
+    // 14. A released pan centers a column left near the canvas center
+    func panRibbon(active: Int, offset: Double) -> Ribbon {
+        Ribbon(columns: (0..<3).map { i in
+            ColumnModel(windows: [WindowModel(id: CGWindowID(901 + i), pid: 1, title: "P\(i)", appName: "App")], widthRatio: 0.5)
+        }, activeColumnIndex: active, viewportOffset: offset)
+    }
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 400), canvasWidth: 1500, config: config), 376,
+                           "A column 24pt off center snaps to center")
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 752), canvasWidth: 1500, config: config), 752,
+                           "A column flush left stays put")
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 0, offset: 0), canvasWidth: 1500, config: config), 0,
+                           "The first column at the strip's start stays put")
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 400), canvasWidth: 1500, config: Config(panCenterSnap: 0)), 400,
+                           "A zero threshold never centers")
+
     guard TestRunner.summary() else {
         exit(1)
     }

@@ -114,6 +114,7 @@ final class PanController {
                 _ = r.focus(windowID: winID)
                 targetWindowID = winID
             }
+            r.viewportOffset = LayoutEngine.panReleaseOffset(for: r, canvasWidth: canvasWidth, config: wm.config)
             wm.ribbons[sID] = r
         }
 
