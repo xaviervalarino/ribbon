@@ -99,8 +99,8 @@ public final class WindowManager {
     var dragDirty = false
     var draggingWindowID: CGWindowID?
     var spaceChangeDeferred = false
-    var capsHeld = false
-    var capsDownAt: DispatchTime?
+    var panHeld = false
+    var panHeldSince: DispatchTime?
     var panningSpaceID: SpaceID?
     lazy var panController = PanController(windowManager: self)
     struct TouchesProbeState {

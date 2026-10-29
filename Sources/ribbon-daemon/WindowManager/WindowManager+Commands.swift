@@ -193,8 +193,8 @@ extension WindowManager {
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
-        // A pan survives the caps state that drives it and commands that change nothing.
-        if action != "modifier" && action != "status" {
+        // A pan survives the hold that drives it and commands that change nothing.
+        if action != "pan" && action != "status" {
             panController.endPan(snap: false)
         }
 
@@ -291,23 +291,23 @@ extension WindowManager {
         case "mission-control":
             launchMissionControl()
             return "ok"
-        case "modifier":
-            guard parts.count == 3, parts[1].lowercased() == "caps" else {
-                return "error: usage: modifier caps down|up"
-            }
-            switch parts[2].lowercased() {
-            case "down":
-                capsHeld = true
-                capsDownAt = .now()
+        case "pan":
+            // A key binding sends `pan begin` on press and `pan end` on release; between them
+            // pointer motion pans the strip instead of moving the cursor.
+            guard parts.count == 2 else { return "error: usage: pan begin|end" }
+            switch parts[1].lowercased() {
+            case "begin":
+                panHeld = true
+                panHeldSince = .now()
                 panController.resetIfIdle()
                 inputTap.setPointerMonitoring(true)
-            case "up":
-                capsHeld = false
-                capsDownAt = nil
+            case "end":
+                panHeld = false
+                panHeldSince = nil
                 inputTap.setPointerMonitoring(false)
                 panController.endPan(snap: true)
             default:
-                return "error: usage: modifier caps down|up"
+                return "error: usage: pan begin|end"
             }
             return "ok"
         case "focus-display":
