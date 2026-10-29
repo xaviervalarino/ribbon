@@ -382,12 +382,14 @@ public final class WindowManager {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        scrollAnimator.displaysChanged()
     }
 
     func displayConfigurationChanged() {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        scrollAnimator.displaysChanged()
 
         displaySamplingCount = 0
         lastSampledDisplaySnapshot = nil

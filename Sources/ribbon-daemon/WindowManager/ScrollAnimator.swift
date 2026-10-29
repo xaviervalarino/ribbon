@@ -74,6 +74,8 @@ final class ScrollAnimator: @unchecked Sendable {
     /// Longest an app's steps run ahead; past this, the app is too busy for a lead to line it up.
     private static let maxLeadMs = 40.0
     private static let frameMs = 1000.0 / 120.0
+    /// How long a resumed display link may go without a frame before the timer replaces it.
+    private static let deadLinkMs = 250
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
@@ -99,6 +101,7 @@ final class ScrollAnimator: @unchecked Sendable {
     private var finalsDraining: [pid_t: Int] = [:]
     private var sentWhileDraining: Set<pid_t> = []
     private var framesThisSlide = 0
+    private var linkResumes = 0
     private var holdMsThisSlide = 0.0
     private var lastTickMs: Double?
 
@@ -192,14 +195,40 @@ final class ScrollAnimator: @unchecked Sendable {
         }
         if let link = displayLink {
             link.isPaused = false
+            watchForDeadLink()
             return
         }
+        startFallbackTimer()
+    }
+
+    private func startFallbackTimer() {
         guard fallbackTimer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now(), repeating: .microseconds(Int(Self.frameMs * 1000)), leeway: .milliseconds(1))
         t.setEventHandler { [weak self] in self?.tick() }
         fallbackTimer = t
         t.resume()
+    }
+
+    /// Drops the display link: a link stops ticking once its display is removed or asleep, and a
+    /// slide waiting on it never ends. A running slide continues on the timer; the next slide links
+    /// to the display that is main then.
+    func displaysChanged() {
+        displayLink?.invalidate()
+        displayLink = nil
+        if isActive { startFallbackTimer() }
+    }
+
+    /// A resumed link that sends no frame in time belongs to a display that is gone or asleep.
+    private func watchForDeadLink() {
+        linkResumes += 1
+        let resume = linkResumes
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.deadLinkMs)) { [weak self] in
+            guard let self, resume == self.linkResumes, self.isActive, self.framesThisSlide == 0,
+                  self.displayLink != nil else { return }
+            RibbonLog.log("display link sent no frame in \(Self.deadLinkMs)ms; using timer", category: "slide")
+            self.displaysChanged()
+        }
     }
 
     private func pauseFrames() {
