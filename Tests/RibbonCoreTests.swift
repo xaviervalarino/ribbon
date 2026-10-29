@@ -433,6 +433,87 @@ func runTests() {
     navRibbon.focusRowUp(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
 
+    // 15. adjustWidth grow, clamp, and explicit width clearing (C.1)
+    var c1Ribbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "A", appName: "App1")], widthRatio: 0.5),
+        ColumnModel(windows: [WindowModel(id: 602, pid: 2, title: "B", appName: "App2")], widthRatio: 0.5)
+    ], activeColumnIndex: 0)
+    let appliedGrow = c1Ribbon.adjustWidth(by: 0.1)
+    TestRunner.assertTrue(abs(appliedGrow - 0.1) < 1e-9, "Grow from 0.5 by 0.1 applies 0.1")
+    TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 0.6, "Column ratio is updated to 0.6")
+
+    var driftRibbon = c1Ribbon
+    driftRibbon.adjustWidth(by: 0.1)
+    driftRibbon.adjustWidth(by: -0.2)
+    TestRunner.assertEqual(driftRibbon.columns[0].widthRatio, 0.5, "Steps there and back land exactly on 0.5")
+
+    let appliedClampHigh = c1Ribbon.adjustWidth(by: 0.8)
+    TestRunner.assertTrue(abs(appliedClampHigh - 0.4) < 1e-9, "Growth clamped at 1.0 applies only 0.4")
+    TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 1.0, "Column ratio clamps at 1.0")
+
+    let appliedClampLow = c1Ribbon.adjustWidth(by: -0.95)
+    TestRunner.assertTrue(abs(appliedClampLow + 0.85) < 1e-9, "Shrinkage clamped at 0.15 applies only -0.85")
+    TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 0.15, "Column ratio clamps at 0.15")
+
+    var singleExplicitRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 603, pid: 1, title: "Single", appName: "App1")], widthRatio: 0.8, hasExplicitSingleWidth: true)
+    ], activeColumnIndex: 0)
+    TestRunner.assertTrue(singleExplicitRibbon.columns[0].hasExplicitSingleWidth, "Initial single column has explicit width")
+    singleExplicitRibbon.adjustWidth(by: 0.2)
+    TestRunner.assertEqual(singleExplicitRibbon.columns[0].widthRatio, 1.0, "Single column ratio grows to 1.0")
+    TestRunner.assertFalse(singleExplicitRibbon.columns[0].hasExplicitSingleWidth, "Single column grow to 1.0 clears hasExplicitSingleWidth")
+
+    var autoExpandedRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 604, pid: 1, title: "Auto", appName: "App1")], widthRatio: 0.5)
+    ], activeColumnIndex: 0)
+    TestRunner.assertEqual(autoExpandedRibbon.adjustWidth(by: 0.1), 0.0, "Growing an auto-expanded lone column applies nothing")
+    TestRunner.assertEqual(autoExpandedRibbon.columns[0].widthRatio, 0.5, "Auto-expanded lone column keeps its stored ratio")
+
+    // 16. alignedOffset left, center, right, and short-strip clamp (C.2)
+    let alignConfig = Config(windowGap: 0, edgeMargin: 0)
+    let c2Ribbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 611, pid: 1, title: "Col0", appName: "App1")], widthRatio: 0.5),
+        ColumnModel(windows: [WindowModel(id: 612, pid: 2, title: "Col1", appName: "App2")], widthRatio: 0.5),
+        ColumnModel(windows: [WindowModel(id: 613, pid: 3, title: "Col2", appName: "App3")], widthRatio: 0.5)
+    ], activeColumnIndex: 1)
+    let canvasW1000 = 1000.0
+    let offsetLeft = LayoutEngine.alignedOffset(for: c2Ribbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .left)
+    TestRunner.assertEqual(offsetLeft, 500.0, "Active middle column aligns left to 500")
+
+    let offsetCenter = LayoutEngine.alignedOffset(for: c2Ribbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .center)
+    TestRunner.assertEqual(offsetCenter, 250.0, "Active middle column aligns center to 250")
+
+    let offsetRight = LayoutEngine.alignedOffset(for: c2Ribbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .right)
+    TestRunner.assertEqual(offsetRight, 0.0, "Active middle column aligns right to 0")
+
+    // Short strip: 1 column of 0.5 (width 500) on 1000pt canvas
+    let shortStripRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 614, pid: 1, title: "Short", appName: "App1")], widthRatio: 0.5, hasExplicitSingleWidth: true)
+    ], activeColumnIndex: 0)
+    let shortOffsetRight = LayoutEngine.alignedOffset(for: shortStripRibbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .right)
+    TestRunner.assertEqual(shortOffsetRight, 0.0, "Right-clamp when strip is shorter than canvas clamps to 0")
+
+    // 17. moveFirst/Last and focusFirst/Last (C.3)
+    var c3Ribbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 701, pid: 1, title: "0", appName: "App1")]),
+        ColumnModel(windows: [WindowModel(id: 702, pid: 2, title: "1", appName: "App2")]),
+        ColumnModel(windows: [WindowModel(id: 703, pid: 3, title: "2", appName: "App3")]),
+        ColumnModel(windows: [WindowModel(id: 704, pid: 4, title: "3", appName: "App4")])
+    ], activeColumnIndex: 2)
+    c3Ribbon.moveFirst()
+    TestRunner.assertEqual(c3Ribbon.columns.map { $0.windows[0].id }, [703, 701, 702, 704], "moveFirst on index 2 places column at 0")
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 0, "activeColumnIndex follows to 0")
+
+    c3Ribbon.moveLast()
+    TestRunner.assertEqual(c3Ribbon.columns.map { $0.windows[0].id }, [701, 702, 704, 703], "moveLast on index 0 places column at 3")
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 3, "activeColumnIndex follows to end")
+
+    c3Ribbon.focusFirst()
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 0, "focusFirst moves activeColumnIndex to 0")
+
+    c3Ribbon.focusLast()
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 3, "focusLast moves activeColumnIndex to 3")
+
     guard TestRunner.summary() else {
         exit(1)
     }

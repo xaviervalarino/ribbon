@@ -53,6 +53,16 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
+    public mutating func focusFirst() {
+        guard !columns.isEmpty else { return }
+        activeColumnIndex = 0
+    }
+
+    public mutating func focusLast() {
+        guard !columns.isEmpty else { return }
+        activeColumnIndex = columns.count - 1
+    }
+
     /// Moves one grid row up; the top row stays put.
     public mutating func focusRowUp(perRow: Int) {
         guard perRow > 0, activeColumnIndex >= perRow else { return }
@@ -97,10 +107,47 @@ public struct Ribbon: Sendable, Codable {
         columns[activeColumnIndex] = col
     }
 
-    public mutating func cycleWidth(ratios: [Double]) {
-        guard columns.indices.contains(activeColumnIndex) else { return }
+    public mutating func moveFirst() {
+        guard columns.indices.contains(activeColumnIndex), activeColumnIndex > 0 else { return }
+        let col = columns.remove(at: activeColumnIndex)
+        columns.insert(col, at: 0)
+        activeColumnIndex = 0
+    }
+
+    public mutating func moveLast() {
+        guard columns.indices.contains(activeColumnIndex), activeColumnIndex < columns.count - 1 else { return }
+        let col = columns.remove(at: activeColumnIndex)
+        columns.append(col)
+        activeColumnIndex = columns.count - 1
+    }
+
+    /// The active column's width ratio as laid out: a lone column without an explicit width fills the canvas.
+    public var effectiveWidthRatio: Double? {
+        guard columns.indices.contains(activeColumnIndex) else { return nil }
         let isSingleAutoExpanded = (columns.count == 1 && !columns[0].hasExplicitSingleWidth)
-        let effectiveCurrentRatio = isSingleAutoExpanded ? 1.0 : columns[activeColumnIndex].widthRatio
+        return isSingleAutoExpanded ? 1.0 : columns[activeColumnIndex].widthRatio
+    }
+
+    /// Changes the active column's width ratio by `delta`, clamped to [0.15, 1.0], and returns the
+    /// change actually applied.
+    @discardableResult
+    public mutating func adjustWidth(by delta: Double) -> Double {
+        guard let current = effectiveWidthRatio else { return 0.0 }
+        // Rounding to a thousandth keeps repeated steps from drifting (0.5 + 0.1 + 0.1 - 0.2
+        // lands below 0.5 and floors a pixel short).
+        let newRatio = max(0.15, min(1.0, ((current + delta) * 1000).rounded() / 1000))
+        // A clamped no-op keeps the stored ratio, which a lone auto-expanded column needs once a
+        // second column joins.
+        guard abs(newRatio - current) >= 0.0001 else { return 0.0 }
+        columns[activeColumnIndex].widthRatio = newRatio
+        if columns.count == 1 {
+            columns[activeColumnIndex].hasExplicitSingleWidth = (abs(newRatio - 1.0) >= 0.01)
+        }
+        return newRatio - current
+    }
+
+    public mutating func cycleWidth(ratios: [Double]) {
+        guard let effectiveCurrentRatio = effectiveWidthRatio else { return }
 
         let nextRatio: Double
         if let idx = ratios.firstIndex(where: { abs($0 - effectiveCurrentRatio) < 0.01 }) {
