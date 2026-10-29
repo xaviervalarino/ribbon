@@ -298,7 +298,7 @@ extension WindowManager: AXEventObserverDelegate {
                 removeFromRibbon(id: id)
             }
             scheduleRetile()
-        case .unhidden:
+        case .unhidden, .observedLate:
             guard let pid = pid else { return }
             let onScreen = onScreenWindowIDs()
             for win in AXElement.application(pid: pid).windows {
@@ -307,6 +307,10 @@ extension WindowManager: AXEventObserverDelegate {
                 }
             }
             scheduleRetile()
+            // A launch's activation found no window yet; its front window takes focus now.
+            if kind == .observedLate, NSWorkspace.shared.frontmostApplication?.processIdentifier == pid {
+                applicationActivated(pid: pid)
+            }
         case .spaceChanged:
             handleActiveSpaceDidChange()
         }
