@@ -55,8 +55,7 @@ extension WindowManager: AXEventObserverDelegate {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
         let isAdmitted = admits(element)
         // A new tab opens at its group's frame. Adopting it as a column would move the whole group.
-        if isAdmitted, let id = element.windowID, let sibling = tabSibling(of: element, pid: pid) {
-            holdTabCandidate(element, id: id, sibling: sibling, pid: pid, focus: isFrontmost ? id : nil)
+        if isAdmitted, let id = element.windowID, claimNewTab(element, id: id, pid: pid, focus: isFrontmost ? id : nil) {
             return
         }
 
@@ -263,8 +262,7 @@ extension WindowManager: AXEventObserverDelegate {
         if foundSpaceID == nil {
             if let onScreen = onScreenWindowIDs(), onScreen.contains(id), admits(element) {
                 // A new tab's focus event can arrive before its creation event.
-                if let sibling = tabSibling(of: element, pid: pid) {
-                    holdTabCandidate(element, id: id, sibling: sibling, pid: pid, focus: id)
+                if claimNewTab(element, id: id, pid: pid, focus: id) {
                     return
                 }
                 if adopt(element: element, pid: pid, activate: true) {

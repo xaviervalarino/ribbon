@@ -208,15 +208,59 @@ extension WindowManager {
         }
     }
 
-    /// The app's tiled window whose frame matches `element` within 2pt. Tabs share their group's
-    /// frame; macOS cascades a genuine new window to a different origin.
-    func tabSibling(of element: AXElement, pid: pid_t) -> CGWindowID? {
-        guard let frame = element.frame else { return nil }
-        let ownID = cachedWindowID(for: element)
-        let candidates = allRibbonWindows.filter { $0.pid == pid && $0.id != ownID }.map(\.id).sorted()
-        return candidates.first { id in
-            serverFrame(id)?.isNear(frame) ?? false
+    /// Gives a new window its group's slot when it is a native tab: at once when the sibling has
+    /// ordered out, else held until the reconcile sees it do so. False for an ordinary window.
+    func claimNewTab(_ element: AXElement, id: CGWindowID, pid: pid_t, focus: CGWindowID?) -> Bool {
+        guard let sibling = tabSibling(of: element, pid: pid) else { return false }
+        if sibling.orderedOut, swapTab(out: sibling.id, in: id, element: element, pid: pid, focus: focus) {
+            scheduleTabReconcile(pid: pid)
+            scheduleRetile()
+        } else {
+            holdTabCandidate(element, id: id, sibling: sibling.id, pid: pid, focus: focus)
         }
+        return true
+    }
+
+    /// The tiled window that a new window `element` is a tab of. A new tab orders its group's shown
+    /// tab out before it orders in, so the app's tiled window ordered out on a visible space is the
+    /// sibling (`orderedOut`); with several, the one at the same origin and width (a tab bar showing
+    /// can change the height). Failing that, a tiled window at the same frame within 2pt (macOS
+    /// cascades a genuine new window to a different origin), whose order-out the reconcile awaits.
+    func tabSibling(of element: AXElement, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
+        let ownID = cachedWindowID(for: element)
+        let tiled = allRibbonWindows.filter { $0.pid == pid && $0.id != ownID }.map(\.id).sorted()
+        guard !tiled.isEmpty, let onScreen = onScreenWindowIDs() else { return nil }
+        let frame = element.frame
+        let tiledFrames = Dictionary(uniqueKeysWithValues: tiled.compactMap { id in serverFrame(id).map { (id, $0) } })
+
+        let appHidden = NSRunningApplication(processIdentifier: pid)?.isHidden ?? true
+        let visibleSpaces = Set(SpaceManager.currentTopology().activeSpaceByDisplay.values)
+        let orderedOut = appHidden ? [] : tiled.filter { id in
+            tiledFrames[id] != nil && !onScreen.contains(id)
+                && spaceByWindowID[id].map(visibleSpaces.contains) ?? false
+        }
+        if orderedOut.count == 1 {
+            return (orderedOut[0], true)
+        }
+        if let frame, let id = orderedOut.first(where: { id in
+            guard let tiledFrame = tiledFrames[id] else { return false }
+            return abs(tiledFrame.minX - frame.minX) <= 2 && abs(tiledFrame.width - frame.width) <= 2
+        }) {
+            return (id, true)
+        }
+        if let frame, let id = tiled.first(where: { tiledFrames[$0]?.isNear(frame) ?? false }) {
+            return (id, false)
+        }
+
+        let format = { (r: CGRect) in "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))" }
+        let siblings = tiled.map { id in
+            "\(id):\(tiledFrames[id].map(format) ?? "none")\(onScreen.contains(id) ? "" : " out")"
+        }
+        RibbonLog.log(
+            "native tab check wid=\(ownID.map(String.init) ?? "?") frame=\(frame.map(format) ?? "none") no sibling in [\(siblings.joined(separator: ", "))]",
+            category: "tabs"
+        )
+        return nil
     }
 
     /// The pid's hidden tabs in ascending window ID order.
