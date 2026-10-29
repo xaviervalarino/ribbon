@@ -76,6 +76,8 @@ final class ScrollAnimator: @unchecked Sendable {
     /// Longest an app's steps run ahead; past this, the app is too busy for a lead to line it up.
     private static let maxLeadMs = 40.0
     private static let frameMs = 1000.0 / 120.0
+    /// How long a running display link may go without a frame before the timer replaces it.
+    private static let deadLinkMs = 250
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
@@ -101,6 +103,9 @@ final class ScrollAnimator: @unchecked Sendable {
     private var finalsDraining: [pid_t: Int] = [:]
     private var sentWhileDraining: Set<pid_t> = []
     private var framesThisSlide = 0
+    private var linkResumes = 0
+    /// Set when a link went silent; slides use the timer until displays change.
+    private var linkWentSilent = false
     private var holdMsThisSlide = 0.0
     private var lastTickMs: Double?
 
@@ -186,7 +191,7 @@ final class ScrollAnimator: @unchecked Sendable {
 
     private func resumeFrames() {
         lastTickMs = nil
-        if displayLink == nil, fallbackTimer == nil,
+        if displayLink == nil, fallbackTimer == nil, !linkWentSilent,
            let link = NSScreen.main?.displayLink(target: linkTarget, selector: #selector(DisplayLinkTarget.step(_:))) {
             link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
             link.add(to: .main, forMode: .common)
@@ -194,14 +199,50 @@ final class ScrollAnimator: @unchecked Sendable {
         }
         if let link = displayLink {
             link.isPaused = false
+            linkResumes += 1
+            watchLink(resume: linkResumes, since: Self.nowMs())
             return
         }
+        startFallbackTimer()
+    }
+
+    private func startFallbackTimer() {
         guard fallbackTimer == nil else { return }
         let t = DispatchSource.makeTimerSource(queue: .main)
         t.schedule(deadline: .now(), repeating: .microseconds(Int(Self.frameMs * 1000)), leeway: .milliseconds(1))
         t.setEventHandler { [weak self] in self?.tick() }
         fallbackTimer = t
         t.resume()
+    }
+
+    /// Drops the display link: a link stops ticking once its display is removed or asleep, and a
+    /// slide waiting on it never ends. A running slide continues on the timer; the next slide links
+    /// to the display that is main then.
+    func displaysChanged() {
+        linkWentSilent = false
+        dropDisplayLink()
+    }
+
+    private func dropDisplayLink() {
+        displayLink?.invalidate()
+        displayLink = nil
+        if isActive { startFallbackTimer() }
+    }
+
+    /// Checks the running link every `deadLinkMs` until the slide ends. A link silent that long
+    /// belongs to a display that is gone or asleep; slides use the timer until displays change.
+    private func watchLink(resume: Int, since startMs: Double) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(Self.deadLinkMs)) { [weak self] in
+            guard let self, resume == self.linkResumes, self.isActive, self.displayLink != nil else { return }
+            let silentMs = Self.nowMs() - (self.lastTickMs ?? startMs)
+            guard silentMs >= Double(Self.deadLinkMs) else {
+                self.watchLink(resume: resume, since: startMs)
+                return
+            }
+            RibbonLog.log("display link silent \(Int(silentMs))ms; using timer", category: "slide")
+            self.linkWentSilent = true
+            self.dropDisplayLink()
+        }
     }
 
     private func pauseFrames() {
