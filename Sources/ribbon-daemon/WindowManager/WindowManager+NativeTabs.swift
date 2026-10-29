@@ -260,12 +260,14 @@ extension WindowManager {
         guard var frame = lastAppliedFrames[id] ?? stripFrame else { return false }
         let frames = serverFrames(pid: pid)
         let hiddenIDs = hiddenTabIDs(pid: pid)
+        guard !hiddenIDs.isEmpty else { return false }
         if !hiddenIDs.contains(where: { frames[$0]?.isSameColumn(frame) ?? false }) {
             // A tab closed mid-slide is reported after the slide, and its group stays where the
-            // last step that reached it left it; the group's next tab already shows there.
+            // last step that reached it left it; the group's next tab already shows there. Slides
+            // are horizontal, so the group keeps the slot's top and width.
             let onScreen = onScreenWindowIDs() ?? []
             let shownSameWidth = hiddenIDs.filter(onScreen.contains).compactMap { frames[$0] }
-                .filter { abs($0.width - frame.width) <= 2 }
+                .filter { abs($0.width - frame.width) <= 2 && abs($0.minY - frame.minY) <= 2 }
             guard shownSameWidth.count == 1 else { return false }
             frame = shownSameWidth[0]
         }

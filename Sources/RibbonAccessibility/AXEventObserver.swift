@@ -33,9 +33,12 @@ public final class AXEventObserver {
     private var pendingRetryPids: Set<pid_t> = []
     /// Apps whose observation failed at least once; windows they create before it succeeds send nothing.
     private var failedObservePids: Set<pid_t> = []
-    /// Apps kept after every retry answered cannotComplete for window creation; each later
-    /// observe call tries that registration again.
+    /// Apps kept after every retry answered cannotComplete for window creation; later observe
+    /// calls try that registration again, at most once per `creationRetryInterval`.
     private var missingCreationPids: Set<pid_t> = []
+    private var lastCreationRetry: [pid_t: Date] = [:]
+    /// A busy app answers cannotComplete only after the AX timeout, which blocks the main thread.
+    private static let creationRetryInterval: TimeInterval = 5
     private var isRunning: Bool = false
     private static let retryDelays: [TimeInterval] = [0.5, 1.0, 2.0, 4.0]
     /// Returns true while main-thread handlers must wait (a scroll slide is running): their AX
@@ -126,6 +129,7 @@ public final class AXEventObserver {
         pendingRetryPids.removeAll()
         failedObservePids.removeAll()
         missingCreationPids.removeAll()
+        lastCreationRetry.removeAll()
     }
 
     @objc private func handleAppLaunched(_ notification: Notification) {
@@ -214,10 +218,13 @@ public final class AXEventObserver {
     }
 
     private func retryWindowCreation(obs: AXObserver, pid: pid_t) {
+        if let last = lastCreationRetry[pid], Date().timeIntervalSince(last) < Self.creationRetryInterval { return }
+        lastCreationRetry[pid] = Date()
         let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         let appElement = AXElement.application(pid: pid).rawElement
         guard AXObserverAddNotification(obs, appElement, kAXWindowCreatedNotification as CFString, refcon) == .success else { return }
         missingCreationPids.remove(pid)
+        lastCreationRetry.removeValue(forKey: pid)
         RibbonLog.log("AX observe added window creation pid=\(pid)", category: "discovery")
         sweepObservedLate(pid: pid)
     }
@@ -309,16 +316,16 @@ public final class AXEventObserver {
             // A just-launched app answers cannotComplete until its AX is up; an observer without
             // window creation never sees its windows, so it is dropped and retried. After the last
             // retry it is kept for the notifications that did register (focus still adopts), and
-            // later observe calls retry window creation. Other errors do not clear with time.
+            // later observe calls retry window creation while it still answers cannotComplete.
             if result != .success, notif == kAXWindowCreatedNotification {
                 RibbonLog.log("AX observe failed pid=\(pid) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
+                failedObservePids.insert(pid)
                 observesCreation = false
+                if attempt < Self.retryDelays.count {
+                    retryLater()
+                    return
+                }
                 if result == .cannotComplete {
-                    failedObservePids.insert(pid)
-                    if attempt < Self.retryDelays.count {
-                        retryLater()
-                        return
-                    }
                     missingCreationPids.insert(pid)
                 }
             }
@@ -372,6 +379,7 @@ public final class AXEventObserver {
         pendingRetryPids.remove(pid)
         failedObservePids.remove(pid)
         missingCreationPids.remove(pid)
+        lastCreationRetry.removeValue(forKey: pid)
         if let obs = observers.removeValue(forKey: pid) {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         }
