@@ -72,6 +72,40 @@ public struct SharedEdges: Sendable, Equatable {
 public struct LayoutEngine: Sendable {
     public init() {}
 
+    public enum ViewportAlignment: String, Sendable {
+        case left, center, right
+    }
+
+    /// Computes the scroll offset that positions the active column at the left, center, or right
+    /// of the canvas, clamped so the strip does not scroll past its ends.
+    public static func alignedOffset(
+        for ribbon: Ribbon,
+        canvasWidth: Double,
+        config: Config,
+        alignment: ViewportAlignment
+    ) -> Double {
+        guard !ribbon.columns.isEmpty else { return 0.0 }
+        let geometry = columnGeometry(for: ribbon, canvasWidth: canvasWidth, config: config)
+        guard !geometry.isEmpty else { return 0.0 }
+
+        let activeIdx = max(0, min(ribbon.activeColumnIndex, geometry.count - 1))
+        let a = geometry[activeIdx]
+
+        let targetOffset: Double
+        switch alignment {
+        case .left:
+            targetOffset = a.x
+        case .center:
+            targetOffset = a.x - (canvasWidth - a.width) / 2.0
+        case .right:
+            targetOffset = a.x + a.width - canvasWidth
+        }
+
+        let totalStripWidth = geometry[geometry.count - 1].x + geometry[geometry.count - 1].width
+        let maxOffset = max(0.0, totalStripWidth - canvasWidth)
+        return floor(max(0.0, min(targetOffset, maxOffset)))
+    }
+
     public static func columnGeometry(
         for ribbon: Ribbon,
         canvasWidth: Double,
