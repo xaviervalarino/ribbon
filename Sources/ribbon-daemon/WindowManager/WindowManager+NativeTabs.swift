@@ -219,7 +219,7 @@ extension WindowManager {
         // A tab its focus event already claimed holds a slot; claiming it again would move it.
         guard trackedWindows[id] == nil, nativeTabs[id] == nil else { return false }
         if pendingNewWindows[id] != nil { return true }
-        if let sibling = tabSibling(of: element, id: id, pid: pid) {
+        if let sibling = tabSibling(of: id, frame: serverFrame(id) ?? element.frame, pid: pid) {
             settleNewTab(element, id: id, sibling: sibling, pid: pid, focus: focus)
             return true
         }
@@ -247,7 +247,13 @@ extension WindowManager {
         DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(25)) { [weak self] in
             guard let self, !self.isStopped, let pending = self.pendingNewWindows[id] else { return }
             let waitedMs = Int(CACurrentMediaTime() * 1000 - pending.sinceMs)
-            if let sibling = self.tabSibling(of: pending.element, id: id, pid: pending.pid) {
+            // Another path adopted it meanwhile; its own slot stands.
+            if self.trackedWindows[id] != nil || self.nativeTabs[id] != nil {
+                self.pendingNewWindows.removeValue(forKey: id)
+                return
+            }
+            // WindowServer's frame: an AX read waits behind the app creating the tab.
+            if let sibling = self.tabSibling(of: id, frame: self.serverFrame(id), pid: pending.pid) {
                 self.pendingNewWindows.removeValue(forKey: id)
                 RibbonLog.log("native tab wid=\(id) sibling=\(sibling.id) orderedOut=\(sibling.orderedOut) after \(waitedMs)ms", category: "tabs")
                 self.settleNewTab(pending.element, id: id, sibling: sibling, pid: pending.pid, focus: pending.focus)
@@ -259,20 +265,24 @@ extension WindowManager {
             }
             self.pendingNewWindows.removeValue(forKey: id)
             RibbonLog.log("new window wid=\(id) pid=\(pending.pid) is not a tab after \(waitedMs)ms", category: "tabs")
-            if self.adopt(element: pending.element, pid: pending.pid, activate: pending.focus != nil) {
+            // A click or cmd-tab during the wait moved focus elsewhere; the window then tiles unfocused.
+            let stillFocused = pending.focus != nil
+                && NSRunningApplication(processIdentifier: pending.pid)?.isActive == true
+                && self.frontmostWindowID(pid: pending.pid) == id
+            if self.adopt(element: pending.element, pid: pending.pid, activate: stillFocused) {
                 self.scheduleRetile()
             }
             self.scheduleTabReconcile(pid: pending.pid)
         }
     }
 
-    /// The tiled window that new window `id` is a tab of. A new tab orders its group's shown tab
-    /// out before it orders in, so an app's tiled window ordered out on a visible space at the new
-    /// window's origin and width is the sibling, swapped at once (`orderedOut`). A lone ordered-out
+    /// The tiled window that new window `id` is a tab of. Showing a new tab orders its group's shown
+    /// tab out, so an app's tiled window ordered out on a visible space at the new window's origin
+    /// and width is the sibling, swapped at once (`orderedOut`). A lone ordered-out
     /// window at another frame, or a tiled window at the same frame within 2pt, makes the new window
     /// a candidate that the reconcile settles; Ribbon writes nothing to it meanwhile. Otherwise the
     /// window is ordinary: macOS cascades a genuine new window to a different origin.
-    func tabSibling(of element: AXElement, id: CGWindowID, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
+    func tabSibling(of id: CGWindowID, frame: CGRect?, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
         let tiled = Set(allRibbonWindows.filter { $0.pid == pid && $0.id != id }.map(\.id)).sorted()
         guard !tiled.isEmpty, let onScreen = onScreenWindowIDs() else { return nil }
 
@@ -287,7 +297,6 @@ extension WindowManager {
             return (tiledID, tiledFrame)
         }
 
-        let frame = element.frame
         if let frame, let match = orderedOut.first(where: { $0.frame.isSameColumn(frame) }) {
             return (match.id, true)
         }

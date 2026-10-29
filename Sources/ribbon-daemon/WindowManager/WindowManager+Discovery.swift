@@ -111,7 +111,7 @@ extension WindowManager {
 
             let appElem = AXElement.application(pid: app.processIdentifier)
             for win in appElem.windows {
-                guard admits(win), let id = win.windowID, nativeTabs[id] == nil else { continue }
+                guard admits(win), let id = win.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { continue }
                 if !allLiveIDs.isEmpty && !allLiveIDs.contains(id) { continue }
 
                 let frame = win.frame ?? .zero
@@ -282,8 +282,9 @@ extension WindowManager {
               let appName = app.localizedName,
               !config.ignoredApps.contains(appName) else { return false }
         guard admits(element) else { return false }
-        // A hidden tab joins only through its group's slot (reconcileNativeTabs).
-        guard let id = element.windowID, nativeTabs[id] == nil else { return false }
+        // A hidden tab joins only through its group's slot (reconcileNativeTabs), and a new window
+        // waiting to learn whether it is a tab only through its wait (claimNewTab).
+        guard let id = element.windowID, nativeTabs[id] == nil, pendingNewWindows[id] == nil else { return false }
 
         rememberOriginalFrame(id: id, element: element)
 
