@@ -322,6 +322,34 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
+    /// Puts `window` into the slot holding `id`, keeping the column's width and the row. A copy of
+    /// `window` elsewhere in the ribbon is removed first. The slot is active afterwards when either
+    /// window was active before. Returns false, changing nothing, when `id` is absent.
+    @discardableResult
+    public mutating func replaceWindow(id: CGWindowID, with window: WindowModel) -> Bool {
+        guard slot(of: id) != nil else { return false }
+        let activeID = activeWindow?.id
+        let wasActive = activeID == id || activeID == window.id
+        if window.id != id {
+            removeWindow(id: window.id)
+        }
+        guard let (cIdx, rIdx) = slot(of: id) else { return false }
+        columns[cIdx].windows[rIdx] = window
+        if wasActive {
+            focus(windowID: window.id)
+        }
+        return true
+    }
+
+    private func slot(of id: CGWindowID) -> (column: Int, row: Int)? {
+        for (cIdx, col) in columns.enumerated() {
+            if let rIdx = col.windows.firstIndex(where: { $0.id == id }) {
+                return (cIdx, rIdx)
+            }
+        }
+        return nil
+    }
+
     public mutating func removeWindows(pid: pid_t) {
         let matchingIDs = columns.flatMap { $0.windows }.filter { $0.pid == pid }.map { $0.id }
         for id in matchingIDs {

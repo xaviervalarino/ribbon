@@ -64,6 +64,14 @@ private struct MainThreadRef: @unchecked Sendable {
 extension WindowManager: AXEventObserverDelegate {
     public func windowCreated(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        let isAdmitted = admits(element)
+        // A new tab opens at its group's frame. Adopting it as a column would move the whole group.
+        if isAdmitted, let id = element.windowID, let sibling = tabSibling(of: element, pid: pid) {
+            holdTabCandidate(element, id: id, sibling: sibling, pid: pid, focus: isFrontmost ? id : nil)
+            return
+        }
+
+        let hasTiledWindow = allRibbonWindows.contains { $0.pid == pid }
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         } else if isFrontmost {
@@ -74,10 +82,41 @@ extension WindowManager: AXEventObserverDelegate {
                 }
             }
         }
+        // A tab whose frame settles after creation is caught once it orders its sibling out.
+        if isAdmitted && hasTiledWindow {
+            scheduleTabReconcile(pid: pid)
+        }
     }
 
     public func windowDestroyed(element: AXElement, pid: pid_t) {
+        // A destroyed element no longer answers its window ID, so hidden tabs match by element.
+        if let tabID = nativeTabs.first(where: { CFEqual($0.value.element.rawElement, element.rawElement) })?.key {
+            dropNativeTab(tabID)
+            return
+        }
         guard let id = trackedWindowID(for: element) else { return }
+
+        // Closing a shown tab shows another tab of its group, which takes over the slot.
+        let siblings = nativeTabIDs(pid: pid).filter { $0 != id }
+        if !siblings.isEmpty {
+            let onScreen = onScreenWindowIDs() ?? []
+            let lastFrame = lastAppliedFrames[id]
+            let frameMatch = siblings.first { sibling in
+                guard let lastFrame, let frame = serverFrame(sibling) else { return false }
+                return frame.isNear(lastFrame)
+            }
+            // Any other sibling may belong to another group of the app; a frame write would move that group.
+            if let replacement = siblings.first(where: onScreen.contains) ?? frameMatch,
+               let tab = nativeTabs[replacement],
+               swapTab(out: id, in: replacement, element: tab.element, pid: pid) {
+                dropNativeTab(id)
+                forgetOriginalFrame(id: id)
+                scheduleTabReconcile(pid: pid)
+                scheduleRetile()
+                return
+            }
+        }
+
         removeFromRibbon(id: id)
         forgetOriginalFrame(id: id)
         scheduleRetile()
@@ -91,6 +130,10 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowDeminiaturized(element: AXElement, pid: pid_t) {
         let isFrontmost = NSRunningApplication(processIdentifier: pid)?.isActive ?? false
+        // A minimize can read as ordered out and hide the window as a tab; it returns as a window.
+        if let tabID = nativeTabs.first(where: { CFEqual($0.value.element.rawElement, element.rawElement) })?.key {
+            dropNativeTab(tabID)
+        }
         if adopt(element: element, pid: pid, activate: isFrontmost) {
             scheduleRetile()
         }
@@ -98,7 +141,8 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowResized(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
-        guard let id = trackedWindowID(for: element) else { return }
+        // A hidden tab follows its group's frame; its resize is not a manual one.
+        guard let id = trackedWindowID(for: element), nativeTabs[id] == nil else { return }
 
         // WindowServer bounds trail the app's resize notification by 8-13ms, so a size read here
         // can be the pre-resize size. Any resize inside Ribbon's own echo window is ours, and a
@@ -143,7 +187,7 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func windowMoved(element: AXElement, pid: pid_t) {
         guard !isDisplayReconfiguring else { return }
-        guard let id = trackedWindowID(for: element) else { return }
+        guard let id = trackedWindowID(for: element), nativeTabs[id] == nil else { return }
 
         let now = observer.currentEventTime
         // WindowServer bounds trail the app's move notification, so inside Ribbon's own echo
@@ -215,6 +259,15 @@ extension WindowManager: AXEventObserverDelegate {
             return
         }
 
+        // A tab switch focuses a hidden tab: it takes over its group's slot, never a new column.
+        if nativeTabs[id] != nil {
+            reconcileNativeTabs(pids: [pid], focus: id)
+            if spaceByWindowID[id] == nil {
+                scheduleTabReconcile(pid: pid, focus: id)
+                return
+            }
+        }
+
         // The cached frame stays: an animated click retile slides from it (a parked window from its
         // parking spot), and windowMoved evicts it when the user drags the window.
 
@@ -231,6 +284,11 @@ extension WindowManager: AXEventObserverDelegate {
 
         if foundSpaceID == nil {
             if let onScreen = onScreenWindowIDs(), onScreen.contains(id), admits(element) {
+                // A new tab's focus event can arrive before its creation event.
+                if let sibling = tabSibling(of: element, pid: pid) {
+                    holdTabCandidate(element, id: id, sibling: sibling, pid: pid, focus: id)
+                    return
+                }
                 if adopt(element: element, pid: pid, activate: true) {
                     scheduleRetile()
                     return
@@ -334,6 +392,9 @@ extension WindowManager: AXEventObserverDelegate {
 
     public func applicationTerminated(pid: pid_t) {
         removeAppDriver(for: pid)
+        for id in nativeTabIDs(pid: pid) {
+            dropNativeTab(id)
+        }
         let matchingIDs = Set(allRibbonWindows.filter { $0.pid == pid }.map { $0.id })
         for id in matchingIDs {
             trackedWindows.removeValue(forKey: id)
