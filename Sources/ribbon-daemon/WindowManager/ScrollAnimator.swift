@@ -183,7 +183,8 @@ final class ScrollAnimator: @unchecked Sendable {
     }
 
     /// Stops in-flight slides for `windowIDs` without running their final mutations, so direct
-    /// position writes (such as a pan) take over immediately.
+    /// position writes (such as a pan) take over immediately. A focus held for the strip to
+    /// settle is sent now, since AppDriver already expects it.
     func cancel(windowIDs: Set<CGWindowID>) {
         let wasActive = isActive
         for id in windowIDs {
@@ -192,6 +193,14 @@ final class ScrollAnimator: @unchecked Sendable {
         }
         if let focus = settledFocus, windowIDs.contains(focus.mutation.windowID) {
             settledFocus = nil
+            if let focusOnly = focus.mutation.focusOnly {
+                if inFlight.contains(focus.pid) {
+                    pendingFinals[focus.pid, default: []].append(focusOnly)
+                } else {
+                    enqueueFinals([focusOnly], pid: focus.pid)
+                }
+                onSettledFocus?(focus.mutation.windowID, focus.pid)
+            }
         }
         if wasActive && !isActive {
             pauseFrames()

@@ -337,8 +337,11 @@ extension WindowManager: AXEventObserverDelegate {
 
 extension WindowManager: InputTapDelegate {
     func mouseUp() {
+        // A click mid-pan ends it without the snap's focus, so the click's own focus event stands;
+        // the retile slides the strip back to the active column instead of leaving the pan offset.
         if panController.isPanning {
             panController.endPan(snap: false)
+            retileNow(animated: true)
         }
         guard dragDirty else { return }
         dragDirty = false
