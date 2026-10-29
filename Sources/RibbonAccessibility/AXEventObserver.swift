@@ -5,6 +5,9 @@ import ApplicationServices
 public enum AppEventKind {
     case hidden
     case unhidden
+    /// Observation started late (the app's AX was not ready at launch), so windows it created
+    /// before then sent no notification.
+    case observedLate
     case spaceChanged
 }
 
@@ -120,7 +123,6 @@ public final class AXEventObserver {
 
     @objc private func handleAppLaunched(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
-        RibbonLog.log("app launched pid=\(app.processIdentifier) policy=\(app.activationPolicy.rawValue)", category: "discovery")
         guard app.activationPolicy == .regular else { return }
         observeApplication(pid: app.processIdentifier)
     }
@@ -244,18 +246,20 @@ public final class AXEventObserver {
             }
         }
 
+        func retryLater() {
+            guard attempt < Self.retryDelays.count, !pendingRetryPids.contains(pid) else { return }
+            pendingRetryPids.insert(pid)
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelays[attempt]) { [weak self] in
+                guard let self, self.isRunning, self.pendingRetryPids.remove(pid) != nil else { return }
+                guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
+                self.observeApplication(pid: pid, attempt: attempt + 1)
+            }
+        }
+
         let refcon = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         let error = AXObserverCreate(pid, callback, &observer)
         guard error == .success, let obs = observer else {
-            if attempt < Self.retryDelays.count {
-                guard !pendingRetryPids.contains(pid) else { return }
-                pendingRetryPids.insert(pid)
-                DispatchQueue.main.asyncAfter(deadline: .now() + Self.retryDelays[attempt]) { [weak self] in
-                    guard let self, self.isRunning, self.pendingRetryPids.remove(pid) != nil else { return }
-                    guard let app = NSRunningApplication(processIdentifier: pid), !app.isTerminated else { return }
-                    self.observeApplication(pid: pid, attempt: attempt + 1)
-                }
-            }
+            retryLater()
             return
         }
 
@@ -269,13 +273,20 @@ public final class AXEventObserver {
 
         for notif in notifications {
             let result = AXObserverAddNotification(obs, appElement, notif as CFString, refcon)
-            if result != .success {
-                RibbonLog.log("AX observe failed pid=\(pid) \(notif) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
+            guard result == .success || notif != kAXWindowCreatedNotification else {
+                // A just-launched app answers cannotComplete until its AX is up; an observer
+                // without window creation would never see its windows, so it is dropped and retried.
+                RibbonLog.log("AX observe failed pid=\(pid) err=\(result.rawValue) attempt=\(attempt)", category: "discovery")
+                retryLater()
+                return
             }
         }
 
         CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
         observers[pid] = obs
+        if attempt > 0 {
+            delegate?.applicationEventOccurred(kind: .observedLate, pid: pid)
+        }
 
         if let pending = pendingWindowRegistrations.removeValue(forKey: pid) {
             for element in pending {
