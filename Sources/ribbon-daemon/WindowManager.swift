@@ -386,6 +386,7 @@ public final class WindowManager {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             wakeObserver = nil
         }
+        inputTap.unfreezePointer()
         inputTap.stop()
         if let obs = screensWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
