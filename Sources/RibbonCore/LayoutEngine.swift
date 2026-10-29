@@ -70,6 +70,10 @@ public struct SharedEdges: Sendable, Equatable {
 }
 
 public struct LayoutEngine: Sendable {
+    public struct OverviewCell: Sendable, Equatable {
+        public let x, y, width, height: Double
+    }
+
     public init() {}
 
     public enum ViewportAlignment: String, Sendable {
@@ -106,6 +110,33 @@ public struct LayoutEngine: Sendable {
         return floor(max(0.0, min(targetOffset, maxOffset)))
     }
 
+    public static func overviewGrid(
+        columnCount: Int,
+        canvasWidth: Double,
+        canvasHeight: Double,
+        config: Config
+    ) -> [OverviewCell] {
+        guard columnCount > 0 else { return [] }
+        let perRow = max(1, min(columnCount, config.overviewColumnsPerRow))
+        let rows = (columnCount + perRow - 1) / perRow
+        let gap = config.windowGap
+        let cellW = floor((canvasWidth - Double(perRow - 1) * gap) / Double(perRow))
+        let cellH = floor((canvasHeight - Double(rows - 1) * gap) / Double(rows))
+        var cells: [OverviewCell] = []
+        cells.reserveCapacity(columnCount)
+        for i in 0..<columnCount {
+            let row = i / perRow
+            let slot = i % perRow
+            cells.append(OverviewCell(
+                x: Double(slot) * (cellW + gap),
+                y: Double(row) * (cellH + gap),
+                width: cellW,
+                height: cellH
+            ))
+        }
+        return cells
+    }
+
     public static func columnGeometry(
         for ribbon: Ribbon,
         canvasWidth: Double,
@@ -115,6 +146,7 @@ public struct LayoutEngine: Sendable {
         var result: [(x: Double, width: Double)] = []
         result.reserveCapacity(ribbon.columns.count)
 
+        // computePlan lays overview out with overviewGrid, and minimalScrollOffset returns 0 in overview.
         if ribbon.isOverview {
             let count = ribbon.columns.count
             let totalGaps = Double(max(0, count - 1)) * config.windowGap
@@ -222,6 +254,34 @@ public struct LayoutEngine: Sendable {
         let canvasY = floor(screenFrame.minY + config.edgeMargin)
         let canvasW = floor(screenFrame.width - (config.edgeMargin * 2))
         let canvasH = floor(screenFrame.height - (config.edgeMargin * 2))
+
+        if ribbon.isOverview {
+            let cells = overviewGrid(
+                columnCount: ribbon.columns.count,
+                canvasWidth: canvasW,
+                canvasHeight: canvasH,
+                config: config
+            )
+            var placements: [WindowPlacement] = []
+            for (index, col) in ribbon.columns.enumerated() {
+                let cell = cells[index]
+                placements.append(contentsOf: layoutColumn(
+                    column: col,
+                    x: canvasX + cell.x,
+                    width: cell.width,
+                    canvasY: canvasY + cell.y,
+                    canvasH: cell.height,
+                    gap: config.windowGap,
+                    isStashed: false,
+                    wing: .left,
+                    screenFrame: screenFrame,
+                    targetDisplay: targetDisplay,
+                    allDisplays: allDisplays,
+                    config: config
+                ))
+            }
+            return TilingPlan(placements: placements)
+        }
 
         let geometry = columnGeometry(for: ribbon, canvasWidth: canvasW, config: config)
         var placements: [WindowPlacement] = []

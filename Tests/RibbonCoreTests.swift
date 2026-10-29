@@ -377,6 +377,81 @@ func runTests() {
     c3Ribbon.focusLast()
     TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 3, "focusLast moves activeColumnIndex to 3")
 
+    // 15. Overview flex-row grid and row navigation (D)
+    let grid1 = LayoutEngine.overviewGrid(columnCount: 1, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid1, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 1200, height: 800)
+    ], "1 column fills the canvas")
+
+    let grid3 = LayoutEngine.overviewGrid(columnCount: 3, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid3, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 397, height: 800),
+        LayoutEngine.OverviewCell(x: 401, y: 0, width: 397, height: 800),
+        LayoutEngine.OverviewCell(x: 802, y: 0, width: 397, height: 800)
+    ], "3 columns fit in one row of 397x800 cells")
+
+    let grid4 = LayoutEngine.overviewGrid(columnCount: 4, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid4, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 397, height: 398),
+        LayoutEngine.OverviewCell(x: 401, y: 0, width: 397, height: 398),
+        LayoutEngine.OverviewCell(x: 802, y: 0, width: 397, height: 398),
+        LayoutEngine.OverviewCell(x: 0, y: 402, width: 397, height: 398)
+    ], "4 columns wrap to a second left-aligned row with the same cell width")
+
+    let grid7 = LayoutEngine.overviewGrid(columnCount: 7, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid7, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 401, y: 0, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 802, y: 0, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 0, y: 268, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 401, y: 268, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 802, y: 268, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 0, y: 536, width: 397, height: 264)
+    ], "7 columns wrap across three rows with the seventh column left-aligned")
+
+    let overviewScreen = QuartzRect(x: 0, y: 0, width: 1204, height: 804)
+    let overviewRibbon = Ribbon(
+        columns: [
+            ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "C0", appName: "App1")]),
+            ColumnModel(windows: [
+                WindowModel(id: 602, pid: 2, title: "C1Top", appName: "App2"),
+                WindowModel(id: 603, pid: 3, title: "C1Bot", appName: "App3")
+            ]),
+            ColumnModel(windows: [WindowModel(id: 604, pid: 4, title: "C2", appName: "App4")]),
+            ColumnModel(windows: [WindowModel(id: 605, pid: 5, title: "C3", appName: "App5")])
+        ],
+        activeColumnIndex: 1,
+        viewportOffset: 500,
+        isOverview: true
+    )
+    let overviewPlan = LayoutEngine.computePlan(for: overviewRibbon, screenFrame: overviewScreen, config: config)
+    TestRunner.assertEqual(overviewPlan.placements.count, 5)
+    for p in overviewPlan.placements {
+        TestRunner.assertFalse(p.isStashed, "Overview placements are never stashed")
+        TestRunner.assertEqual(p.naturalFrame, p.frame, "Overview naturalFrame matches frame")
+    }
+    let cell1X = overviewScreen.minX + config.edgeMargin + grid4[1].x
+    let cell1Y = overviewScreen.minY + config.edgeMargin + grid4[1].y
+    TestRunner.assertEqual(overviewPlan.placements[1].quartzFrame, QuartzRect(x: cell1X, y: cell1Y, width: 397, height: 197), "Top stacked window occupies top half of its cell")
+    TestRunner.assertEqual(overviewPlan.placements[2].quartzFrame, QuartzRect(x: cell1X, y: cell1Y + 201, width: 397, height: 197), "Bottom stacked window occupies bottom half of its cell")
+
+    var navRibbon = Ribbon(
+        columns: (0..<7).map { i in ColumnModel(windows: [WindowModel(id: CGWindowID(700 + i), pid: 1, title: "W\(i)", appName: "App")]) },
+        activeColumnIndex: 1,
+        isOverview: true
+    )
+    navRibbon.focusRowDown(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 4, "focusRowDown moves down one row")
+    navRibbon.focusRowDown(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 6, "focusRowDown into a shorter last row lands on its last cell")
+    navRibbon.focusRowDown(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 6, "focusRowDown in the bottom row stays put")
+    navRibbon.focusRowUp(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 3, "focusRowUp moves up one row")
+    navRibbon.activeColumnIndex = 2
+    navRibbon.focusRowUp(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
+
     guard TestRunner.summary() else {
         exit(1)
     }

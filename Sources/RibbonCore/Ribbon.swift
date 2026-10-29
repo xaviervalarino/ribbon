@@ -63,6 +63,18 @@ public struct Ribbon: Sendable, Codable {
         activeColumnIndex = columns.count - 1
     }
 
+    /// Moves one grid row up; the top row stays put.
+    public mutating func focusRowUp(perRow: Int) {
+        guard perRow > 0, activeColumnIndex >= perRow else { return }
+        activeColumnIndex -= perRow
+    }
+
+    /// Moves one grid row down, to the last cell when the row below is shorter; the bottom row stays put.
+    public mutating func focusRowDown(perRow: Int) {
+        guard perRow > 0, activeColumnIndex / perRow < (columns.count - 1) / perRow else { return }
+        activeColumnIndex = min(columns.count - 1, activeColumnIndex + perRow)
+    }
+
     // MARK: - Reordering & Manipulation
 
     public mutating func swapLeft() {

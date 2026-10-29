@@ -187,8 +187,18 @@ extension WindowManager {
             switch dir {
             case "left", "h": ribbon.focusLeft()
             case "right", "l": ribbon.focusRight()
-            case "up", "k": ribbon.focusUp()
-            case "down", "j": ribbon.focusDown()
+            case "up", "k":
+                if ribbon.isOverview {
+                    ribbon.focusRowUp(perRow: config.overviewColumnsPerRow)
+                } else {
+                    ribbon.focusUp()
+                }
+            case "down", "j":
+                if ribbon.isOverview {
+                    ribbon.focusRowDown(perRow: config.overviewColumnsPerRow)
+                } else {
+                    ribbon.focusDown()
+                }
             case "first": ribbon.focusFirst()
             case "last": ribbon.focusLast()
             default: return "error: unknown focus direction"
