@@ -194,6 +194,17 @@ func runTests() {
     )
     let rightParkedRect = QuartzRect(origin: rightOrigin, size: winSize)
     TestRunner.assertTrue(FreeEdgeStashEngine.isZeroBleed(rect: rightParkedRect, hostID: 1, allDisplays: displays), "Blocked right edge parks window with zero bleed into D2")
+    TestRunner.assertEqual(rightParkedRect.maxX, d1Quartz.minX + 1.0, "Right wing of D1 parks at D1's free left edge, not the clamped bottom")
+    TestRunner.assertEqual(rightParkedRect.minY, 100, "Side-edge stash keeps the tiled Y")
+
+    let d2LeftOrigin = FreeEdgeStashEngine.parkedOrigin(
+        windowSize: winSize,
+        tiledY: 100,
+        wing: .left,
+        targetDisplay: d2Bounds,
+        allDisplays: displays
+    )
+    TestRunner.assertEqual(d2LeftOrigin.x, d2Quartz.maxX - 1.0, "Left wing of D2 parks at D2's free right edge")
 
     // 12. Stashed Window Size Invariance (Zero AX Resize / Delta W/H = 0)
     let threeColRibbon = Ribbon(
@@ -301,6 +312,161 @@ func runTests() {
     TestRunner.assertTrue(rightPlan.placements[2].isStashed, "Column past the shared right edge stashes")
     TestRunner.assertFalse(rightPlan.placements[0].isStashed, "Previous column peeks past the free left edge")
 
+    // 12. adjustWidth grow, clamp, and explicit width clearing (C.1)
+    var c1Ribbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "A", appName: "App1")], widthRatio: 0.5),
+        ColumnModel(windows: [WindowModel(id: 602, pid: 2, title: "B", appName: "App2")], widthRatio: 0.5)
+    ], activeColumnIndex: 0)
+    let appliedGrow = c1Ribbon.adjustWidth(by: 0.1)
+    TestRunner.assertTrue(abs(appliedGrow - 0.1) < 1e-9, "Grow from 0.5 by 0.1 applies 0.1")
+    TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 0.6, "Column ratio is updated to 0.6")
+
+    var driftRibbon = c1Ribbon
+    driftRibbon.adjustWidth(by: 0.1)
+    driftRibbon.adjustWidth(by: -0.2)
+    TestRunner.assertEqual(driftRibbon.columns[0].widthRatio, 0.5, "Steps there and back land exactly on 0.5")
+
+    let appliedClampHigh = c1Ribbon.adjustWidth(by: 0.8)
+    TestRunner.assertTrue(abs(appliedClampHigh - 0.4) < 1e-9, "Growth clamped at 1.0 applies only 0.4")
+    TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 1.0, "Column ratio clamps at 1.0")
+
+    let appliedClampLow = c1Ribbon.adjustWidth(by: -0.95)
+    TestRunner.assertTrue(abs(appliedClampLow + 0.85) < 1e-9, "Shrinkage clamped at 0.15 applies only -0.85")
+    TestRunner.assertEqual(c1Ribbon.columns[0].widthRatio, 0.15, "Column ratio clamps at 0.15")
+
+    var singleExplicitRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 603, pid: 1, title: "Single", appName: "App1")], widthRatio: 0.8, hasExplicitSingleWidth: true)
+    ], activeColumnIndex: 0)
+    TestRunner.assertTrue(singleExplicitRibbon.columns[0].hasExplicitSingleWidth, "Initial single column has explicit width")
+    singleExplicitRibbon.adjustWidth(by: 0.2)
+    TestRunner.assertEqual(singleExplicitRibbon.columns[0].widthRatio, 1.0, "Single column ratio grows to 1.0")
+    TestRunner.assertFalse(singleExplicitRibbon.columns[0].hasExplicitSingleWidth, "Single column grow to 1.0 clears hasExplicitSingleWidth")
+
+    var autoExpandedRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 604, pid: 1, title: "Auto", appName: "App1")], widthRatio: 0.5)
+    ], activeColumnIndex: 0)
+    TestRunner.assertEqual(autoExpandedRibbon.adjustWidth(by: 0.1), 0.0, "Growing an auto-expanded lone column applies nothing")
+    TestRunner.assertEqual(autoExpandedRibbon.columns[0].widthRatio, 0.5, "Auto-expanded lone column keeps its stored ratio")
+
+    // 13. alignedOffset left, center, right, and short-strip clamp (C.2)
+    let alignConfig = Config(windowGap: 0, edgeMargin: 0)
+    let c2Ribbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 611, pid: 1, title: "Col0", appName: "App1")], widthRatio: 0.5),
+        ColumnModel(windows: [WindowModel(id: 612, pid: 2, title: "Col1", appName: "App2")], widthRatio: 0.5),
+        ColumnModel(windows: [WindowModel(id: 613, pid: 3, title: "Col2", appName: "App3")], widthRatio: 0.5)
+    ], activeColumnIndex: 1)
+    let canvasW1000 = 1000.0
+    let offsetLeft = LayoutEngine.alignedOffset(for: c2Ribbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .left)
+    TestRunner.assertEqual(offsetLeft, 500.0, "Active middle column aligns left to 500")
+
+    let offsetCenter = LayoutEngine.alignedOffset(for: c2Ribbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .center)
+    TestRunner.assertEqual(offsetCenter, 250.0, "Active middle column aligns center to 250")
+
+    let offsetRight = LayoutEngine.alignedOffset(for: c2Ribbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .right)
+    TestRunner.assertEqual(offsetRight, 0.0, "Active middle column aligns right to 0")
+
+    // Short strip: 1 column of 0.5 (width 500) on 1000pt canvas
+    let shortStripRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 614, pid: 1, title: "Short", appName: "App1")], widthRatio: 0.5, hasExplicitSingleWidth: true)
+    ], activeColumnIndex: 0)
+    let shortOffsetRight = LayoutEngine.alignedOffset(for: shortStripRibbon, canvasWidth: canvasW1000, config: alignConfig, alignment: .right)
+    TestRunner.assertEqual(shortOffsetRight, 0.0, "Right-clamp when strip is shorter than canvas clamps to 0")
+
+    // 14. moveFirst/Last and focusFirst/Last (C.3)
+    var c3Ribbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 701, pid: 1, title: "0", appName: "App1")]),
+        ColumnModel(windows: [WindowModel(id: 702, pid: 2, title: "1", appName: "App2")]),
+        ColumnModel(windows: [WindowModel(id: 703, pid: 3, title: "2", appName: "App3")]),
+        ColumnModel(windows: [WindowModel(id: 704, pid: 4, title: "3", appName: "App4")])
+    ], activeColumnIndex: 2)
+    c3Ribbon.moveFirst()
+    TestRunner.assertEqual(c3Ribbon.columns.map { $0.windows[0].id }, [703, 701, 702, 704], "moveFirst on index 2 places column at 0")
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 0, "activeColumnIndex follows to 0")
+
+    c3Ribbon.moveLast()
+    TestRunner.assertEqual(c3Ribbon.columns.map { $0.windows[0].id }, [701, 702, 704, 703], "moveLast on index 0 places column at 3")
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 3, "activeColumnIndex follows to end")
+
+    c3Ribbon.focusFirst()
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 0, "focusFirst moves activeColumnIndex to 0")
+
+    c3Ribbon.focusLast()
+    TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 3, "focusLast moves activeColumnIndex to 3")
+
+    // 15. Overview flex-row grid and row navigation (D)
+    let grid1 = LayoutEngine.overviewGrid(columnCount: 1, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid1, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 1200, height: 800)
+    ], "1 column fills the canvas")
+
+    let grid3 = LayoutEngine.overviewGrid(columnCount: 3, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid3, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 397, height: 800),
+        LayoutEngine.OverviewCell(x: 401, y: 0, width: 397, height: 800),
+        LayoutEngine.OverviewCell(x: 802, y: 0, width: 397, height: 800)
+    ], "3 columns fit in one row of 397x800 cells")
+
+    let grid4 = LayoutEngine.overviewGrid(columnCount: 4, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid4, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 397, height: 398),
+        LayoutEngine.OverviewCell(x: 401, y: 0, width: 397, height: 398),
+        LayoutEngine.OverviewCell(x: 802, y: 0, width: 397, height: 398),
+        LayoutEngine.OverviewCell(x: 0, y: 402, width: 397, height: 398)
+    ], "4 columns wrap to a second left-aligned row with the same cell width")
+
+    let grid7 = LayoutEngine.overviewGrid(columnCount: 7, canvasWidth: 1200, canvasHeight: 800, config: config)
+    TestRunner.assertEqual(grid7, [
+        LayoutEngine.OverviewCell(x: 0, y: 0, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 401, y: 0, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 802, y: 0, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 0, y: 268, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 401, y: 268, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 802, y: 268, width: 397, height: 264),
+        LayoutEngine.OverviewCell(x: 0, y: 536, width: 397, height: 264)
+    ], "7 columns wrap across three rows with the seventh column left-aligned")
+
+    let overviewScreen = QuartzRect(x: 0, y: 0, width: 1204, height: 804)
+    let overviewRibbon = Ribbon(
+        columns: [
+            ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "C0", appName: "App1")]),
+            ColumnModel(windows: [
+                WindowModel(id: 602, pid: 2, title: "C1Top", appName: "App2"),
+                WindowModel(id: 603, pid: 3, title: "C1Bot", appName: "App3")
+            ]),
+            ColumnModel(windows: [WindowModel(id: 604, pid: 4, title: "C2", appName: "App4")]),
+            ColumnModel(windows: [WindowModel(id: 605, pid: 5, title: "C3", appName: "App5")])
+        ],
+        activeColumnIndex: 1,
+        viewportOffset: 500,
+        isOverview: true
+    )
+    let overviewPlan = LayoutEngine.computePlan(for: overviewRibbon, screenFrame: overviewScreen, config: config)
+    TestRunner.assertEqual(overviewPlan.placements.count, 5)
+    for p in overviewPlan.placements {
+        TestRunner.assertFalse(p.isStashed, "Overview placements are never stashed")
+        TestRunner.assertEqual(p.naturalFrame, p.frame, "Overview naturalFrame matches frame")
+    }
+    let cell1X = overviewScreen.minX + config.edgeMargin + grid4[1].x
+    let cell1Y = overviewScreen.minY + config.edgeMargin + grid4[1].y
+    TestRunner.assertEqual(overviewPlan.placements[1].quartzFrame, QuartzRect(x: cell1X, y: cell1Y, width: 397, height: 197), "Top stacked window occupies top half of its cell")
+    TestRunner.assertEqual(overviewPlan.placements[2].quartzFrame, QuartzRect(x: cell1X, y: cell1Y + 201, width: 397, height: 197), "Bottom stacked window occupies bottom half of its cell")
+
+    var navRibbon = Ribbon(
+        columns: (0..<7).map { i in ColumnModel(windows: [WindowModel(id: CGWindowID(700 + i), pid: 1, title: "W\(i)", appName: "App")]) },
+        activeColumnIndex: 1,
+        isOverview: true
+    )
+    navRibbon.focusRowDown(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 4, "focusRowDown moves down one row")
+    navRibbon.focusRowDown(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 6, "focusRowDown into a shorter last row lands on its last cell")
+    navRibbon.focusRowDown(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 6, "focusRowDown in the bottom row stays put")
+    navRibbon.focusRowUp(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 3, "focusRowUp moves up one row")
+    navRibbon.activeColumnIndex = 2
+    navRibbon.focusRowUp(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
     // 12. SwipeStepper thresholds, axis lock, reversal, finger reset, and excess drop
     var stepper = SwipeStepper()
     TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.06, dy: 0, config: config), nil, "Under 0.03 travel does not step")
@@ -319,6 +485,50 @@ func runTests() {
     var flickStepper = SwipeStepper()
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.90, dy: 0, config: config), .focusRight, "Fast flick fires one step")
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), nil, "Excess travel past threshold is dropped")
+    // 16. Browser extension pop-outs float by title
+    TestRunner.assertTrue(Config().floats(title: "Extension: (Bitwarden Password Manager) - Bitwarden"), "Bitwarden pop-out floats")
+    TestRunner.assertTrue(Config().floats(title: "extension: (uBlock Origin)"), "Pattern matches case-insensitively")
+    TestRunner.assertFalse(Config().floats(title: "Bitwarden Web Vault - Zen"), "A browser tab titled Bitwarden still tiles")
+    // 17. Replacing a window keeps its slot
+    func tab(_ id: CGWindowID) -> WindowModel {
+        WindowModel(id: id, pid: 7, title: "Tab \(id)", appName: "Ghostty")
+    }
+    var tabRibbon = Ribbon(columns: [
+        ColumnModel(windows: [tab(601)], widthRatio: 0.5),
+        ColumnModel(windows: [tab(602)], widthRatio: 0.8, hasExplicitSingleWidth: true)
+    ], activeColumnIndex: 1)
+    TestRunner.assertTrue(tabRibbon.replaceWindow(id: 602, with: tab(603)), "Replace reports a change")
+    TestRunner.assertEqual(tabRibbon.columns.count, 2, "Replace keeps the column count")
+    TestRunner.assertEqual(tabRibbon.columns[1].windows.map(\.id), [603], "New window takes the slot")
+    TestRunner.assertEqual(tabRibbon.columns[1].widthRatio, 0.8, "Replace keeps the column width")
+    TestRunner.assertTrue(tabRibbon.columns[1].hasExplicitSingleWidth, "Replace keeps the explicit width flag")
+    TestRunner.assertEqual(tabRibbon.activeColumnIndex, 1, "Replace keeps the active column")
+    TestRunner.assertEqual(tabRibbon.activeWindow?.id, 603, "The replaced slot stays active")
+
+    var ownColumn = Ribbon(columns: [
+        ColumnModel(windows: [tab(611)], widthRatio: 0.6),
+        ColumnModel(windows: [tab(612)], widthRatio: 0.5),
+        ColumnModel(windows: [tab(613)], widthRatio: 0.4)
+    ], activeColumnIndex: 2)
+    TestRunner.assertTrue(ownColumn.replaceWindow(id: 611, with: tab(613)), "Replace with a tiled window")
+    TestRunner.assertEqual(ownColumn.columns.map { $0.windows.map(\.id) }, [[613], [612]], "The window's own column is removed")
+    TestRunner.assertEqual(ownColumn.columns[0].widthRatio, 0.6, "The slot keeps its width")
+    TestRunner.assertEqual(ownColumn.activeWindow?.id, 613, "The slot is active when the moved window was")
+
+    let untouched = Ribbon(columns: [ColumnModel(windows: [tab(621)])], activeColumnIndex: 0)
+    var absent = untouched
+    TestRunner.assertFalse(absent.replaceWindow(id: 699, with: tab(622)), "Absent id reports no change")
+    TestRunner.assertEqual(absent.columns, untouched.columns, "Absent id leaves the columns unchanged")
+    TestRunner.assertEqual(absent.activeColumnIndex, untouched.activeColumnIndex, "Absent id leaves the active column")
+
+    var stacked2 = Ribbon(columns: [
+        ColumnModel(windows: [tab(631)]),
+        ColumnModel(windows: [tab(632), tab(633), tab(634)], activeRowIndex: 0)
+    ], activeColumnIndex: 0)
+    TestRunner.assertTrue(stacked2.replaceWindow(id: 633, with: tab(635)), "Replace in a stacked column")
+    TestRunner.assertEqual(stacked2.columns[1].windows.map(\.id), [632, 635, 634], "Replace keeps the row")
+    TestRunner.assertEqual(stacked2.columns[1].activeRowIndex, 0, "An inactive slot leaves the active row")
+    TestRunner.assertEqual(stacked2.activeColumnIndex, 0, "An inactive slot leaves the active column")
 
     // 13. A released pan focuses a fully visible column so the strip stays put
     let panGeometry: [(x: Double, width: Double)] = [(x: 0, width: 750), (x: 760, width: 1200), (x: 1970, width: 1200)]

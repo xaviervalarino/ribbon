@@ -98,7 +98,14 @@ extension WindowManager {
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             let name = app.localizedName ?? "?"
             if let filter = appFilter, !name.lowercased().contains(filter.lowercased()) { continue }
-            for win in AXElement.application(pid: app.processIdentifier).windows {
+            let appElem = AXElement.application(pid: app.processIdentifier)
+            var windows = appElem.windows.map { (win: $0, listed: true) }
+            // A popup can be missing from AXWindows yet reach the ribbon as the focused window.
+            if let focused = appElem.focusedWindow,
+               !windows.contains(where: { $0.win.windowID == focused.windowID }) {
+                windows.append((win: focused, listed: false))
+            }
+            for (win, listed) in windows {
                 let id = win.windowID
                 let frame = win.frame.map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "?"
                 let present = buttons.filter { win.hasValue($0.1) }.map(\.0).joined(separator: ",")
@@ -108,6 +115,7 @@ extension WindowManager {
                     + " sizeSettable=\(win.isSettable(kAXSizeAttribute)) modal=\(win.bool(kAXModalAttribute) ?? false)"
                     + " buttons=\(present.isEmpty ? "none" : present)"
                     + " admitted=\(admits(win)) inRibbon=\(id.map { spaceByWindowID[$0] != nil } ?? false)"
+                    + (listed ? "" : " (focused, not in AXWindows)")
                 )
             }
         }
@@ -132,6 +140,21 @@ extension WindowManager {
             return "error: unknown setting '\(args[0])'"
         }
         return "ok"
+    }
+
+    /// Canvas width of the display showing `sID`, as `windowResized` measures it.
+    private func canvasWidth(forSpace sID: SpaceID) -> Double? {
+        let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
+        guard let screen = screen(forDisplayID: dID) ?? NSScreen.main else { return nil }
+        let width = screen.visibleFrame.width - (config.edgeMargin * 2)
+        return width > 0 ? width : nil
+    }
+
+    private func launchMissionControl() {
+        NSWorkspace.shared.openApplication(
+            at: URL(fileURLWithPath: "/System/Applications/Mission Control.app"),
+            configuration: NSWorkspace.OpenConfiguration()
+        )
     }
 
     public func handleCommand(_ command: String) -> String {
@@ -166,6 +189,7 @@ extension WindowManager {
         // Commands act on the ribbon's own active column: macOS focus lags while the previous
         // command's activation is in flight. Clicks reach the ribbon as focus events.
         let sID = currentActiveSpaceID()
+        var openMissionControlAfterRetile = false
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
@@ -187,8 +211,20 @@ extension WindowManager {
             switch dir {
             case "left", "h": ribbon.focusLeft()
             case "right", "l": ribbon.focusRight()
-            case "up", "k": ribbon.focusUp()
-            case "down", "j": ribbon.focusDown()
+            case "up", "k":
+                if ribbon.isOverview {
+                    ribbon.focusRowUp(perRow: config.overviewColumnsPerRow)
+                } else {
+                    ribbon.focusUp()
+                }
+            case "down", "j":
+                if ribbon.isOverview {
+                    ribbon.focusRowDown(perRow: config.overviewColumnsPerRow)
+                } else {
+                    ribbon.focusDown()
+                }
+            case "first": ribbon.focusFirst()
+            case "last": ribbon.focusLast()
             default: return "error: unknown focus direction"
             }
         case "swap", "move":
@@ -199,7 +235,42 @@ extension WindowManager {
             case "right", "l": ribbon.swapRight()
             case "up", "k": ribbon.swapUp()
             case "down", "j": ribbon.swapDown()
+            case "first": ribbon.moveFirst()
+            case "last": ribbon.moveLast()
             default: return "error: unknown swap direction"
+            }
+        case "grow", "shrink":
+            ribbon.isOverview = false
+            guard let dir = parts.dropFirst().first?.lowercased(), dir == "left" || dir == "right" else {
+                return "error: unknown \(action) direction"
+            }
+            var step = config.widthStep
+            if parts.count > 2 {
+                guard let parsed = Double(parts[2]), parsed > 0 else {
+                    return "error: \(action) step must be a positive number"
+                }
+                step = parsed
+            }
+            let appliedDelta = ribbon.adjustWidth(by: action == "grow" ? step : -step)
+            // The left variants keep the column's right edge in place by scrolling with the change;
+            // a column against the canvas's left edge has no room to scroll and grows rightward.
+            if dir == "left", let canvasW = canvasWidth(forSpace: sID) {
+                // Column widths scale with the canvas plus one gap (see columnGeometry).
+                ribbon.viewportOffset = max(0.0, ribbon.viewportOffset + appliedDelta * (canvasW + config.windowGap))
+            }
+        case "align":
+            ribbon.isOverview = false
+            guard let dir = parts.dropFirst().first?.lowercased(),
+                  let alignment = LayoutEngine.ViewportAlignment(rawValue: dir) else {
+                return "error: unknown alignment"
+            }
+            if let canvasW = canvasWidth(forSpace: sID) {
+                ribbon.viewportOffset = LayoutEngine.alignedOffset(
+                    for: ribbon,
+                    canvasWidth: canvasW,
+                    config: config,
+                    alignment: alignment
+                )
             }
         case "cycle-width", "cycle":
             ribbon.isOverview = false
@@ -211,7 +282,15 @@ extension WindowManager {
             ribbon.isOverview = false
             ribbon.barf()
         case "toggle-overview", "overview":
-            ribbon.toggleOverview()
+            if parts.dropFirst().first?.lowercased() == "mission-control" {
+                ribbon.isOverview = true
+                openMissionControlAfterRetile = true
+            } else {
+                ribbon.toggleOverview()
+            }
+        case "mission-control":
+            launchMissionControl()
+            return "ok"
         case "pan":
             // A key binding sends `pan begin` on press and `pan end` on release; between them
             // pointer motion pans the strip instead of moving the cursor.
@@ -308,6 +387,20 @@ extension WindowManager {
 
         let newActive = ribbon.activeWindow?.id
         retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: true)
+
+        if openMissionControlAfterRetile {
+            // A command that left overview before the slide settled cancels the launch.
+            let launch = { [weak self] in
+                guard let self, self.ribbons[sID]?.isOverview == true else { return }
+                self.launchMissionControl()
+            }
+            if scrollAnimator.isActive {
+                scrollAnimator.onNextIdle = launch
+            } else {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50), execute: launch)
+            }
+        }
+
         return "ok"
     }
 }

@@ -27,9 +27,18 @@ public struct Config: Sendable, Codable {
     public var windowGap: Double
     public var edgeMargin: Double
     public var defaultWidthRatio: Double
+    public var widthStep: Double
     public var widthCycleRatios: [Double]
     public var appWidthRatios: [String: Double]
     public var ignoredApps: Set<String>
+    /// Windows whose title contains one of these (case-insensitive) float instead of tiling.
+    /// Browser extension pop-outs (Bitwarden's passkey prompt) report as standard, resizable
+    /// windows, so their title is the only thing that sets them apart.
+    public var floatTitlePatterns: [String]
+    public func floats(title: String) -> Bool {
+        floatTitlePatterns.contains { title.localizedCaseInsensitiveContains($0) }
+    }
+
     public var stashCorner: StashCorner
     public var stashSliverSize: Double
     public var spaceChangeDebounceMs: Int
@@ -37,6 +46,7 @@ public struct Config: Sendable, Codable {
     public var scrollAnimationMs: Int
     public var resizeMode: ResizeMode
     public var focusTiming: FocusTiming
+    public var overviewColumnsPerRow: Int
     public var swipeFingers: Int
     public var swipeFirst: Double
     public var swipeStep: Double
@@ -46,6 +56,7 @@ public struct Config: Sendable, Codable {
         windowGap: Double = 4.0,
         edgeMargin: Double = 2.0,
         defaultWidthRatio: Double = 0.5,
+        widthStep: Double = 0.1,
         widthCycleRatios: [Double] = [0.382, 0.5, 0.618, 0.8, 1.0],
         appWidthRatios: [String: Double] = [
             "Zen Browser": 0.8,
@@ -69,12 +80,14 @@ public struct Config: Sendable, Codable {
             "Activity Monitor",
             "borders"
         ],
+        floatTitlePatterns: [String] = ["Extension: ("],
         stashCorner: StashCorner = .bottomRight,
         stashSliverSize: Double = 2.0,
         spaceChangeDebounceMs: Int = 25,
         scrollAnimationMs: Int = 55,
         resizeMode: ResizeMode = .end,
         focusTiming: FocusTiming = .end,
+        overviewColumnsPerRow: Int = 3,
         swipeFingers: Int = 3,
         swipeFirst: Double = 0.03,
         swipeStep: Double = 0.15,
@@ -83,15 +96,18 @@ public struct Config: Sendable, Codable {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
         self.defaultWidthRatio = defaultWidthRatio
+        self.widthStep = widthStep
         self.widthCycleRatios = widthCycleRatios
         self.appWidthRatios = appWidthRatios
         self.ignoredApps = ignoredApps
+        self.floatTitlePatterns = floatTitlePatterns
         self.stashCorner = stashCorner
         self.stashSliverSize = stashSliverSize
         self.spaceChangeDebounceMs = spaceChangeDebounceMs
         self.scrollAnimationMs = scrollAnimationMs
         self.resizeMode = resizeMode
         self.focusTiming = focusTiming
+        self.overviewColumnsPerRow = overviewColumnsPerRow
         self.swipeFingers = swipeFingers
         self.swipeFirst = swipeFirst
         self.swipeStep = swipeStep

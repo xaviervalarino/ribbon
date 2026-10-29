@@ -39,11 +39,15 @@ extension WindowManager {
 
     // MARK: - Debounced Retile
 
-    func scheduleRetile() {
+    func scheduleRetile(animated: Bool = false) {
+        retileAnimated = retileAnimated || animated
         if retileWork != nil { return }
         let work = DispatchWorkItem { [weak self] in
-            self?.retileWork = nil
-            self?.retile()
+            guard let self else { return }
+            self.retileWork = nil
+            let shouldAnimate = self.retileAnimated
+            self.retileAnimated = false
+            self.retile(animated: shouldAnimate)
         }
         retileWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.025, execute: work)
@@ -52,7 +56,37 @@ extension WindowManager {
     func retileNow(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false, quiet: Bool = false) {
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
         retile(allSpaces: allSpaces, focusWindowID: focusWindowID, animated: animated, quiet: quiet)
+    }
+
+    /// A failed AX write leaves the window where it was: its cached frame is dropped and a retile
+    /// 500ms later writes it again, at most `maxWriteRetries` times in a row. After that the cache
+    /// keeps the frame, so a hung app is not hammered with writes it cannot answer.
+    func writeFailed(id: CGWindowID, frame: CGRect, error: AXError) {
+        // A newer plan already replaced the failed frame, and its own write reports separately.
+        guard lastAppliedFrames[id] == frame else { return }
+
+        let maxWriteRetries = 3
+        let now = DispatchTime.now()
+        var retry = writeRetries[id] ?? (count: 0, last: now)
+        // Failures 10s apart are unrelated, so each starts a fresh run of retries.
+        if now > retry.last + .seconds(10) { retry.count = 0 }
+        retry.count += 1
+        retry.last = now
+        writeRetries[id] = retry
+        guard retry.count <= maxWriteRetries else {
+            RibbonLog.log("AX write retries exhausted wid=\(id) err=\(error.rawValue)", category: "layout")
+            return
+        }
+
+        lastAppliedFrames.removeValue(forKey: id)
+        RibbonLog.log("AX write retry \(retry.count)/\(maxWriteRetries) wid=\(id) err=\(error.rawValue)", category: "layout")
+        DispatchQueue.main.asyncAfter(deadline: now + .milliseconds(500)) { [weak self] in
+            // A sliding window's final write reports for itself; a retile now would restart the slide.
+            guard let self, !self.scrollAnimator.isAnimating(id) else { return }
+            self.scheduleRetile()
+        }
     }
 
     // MARK: - Layout & Retile
@@ -164,6 +198,8 @@ extension WindowManager {
         let slideMs = config.scrollAnimationMs
 
         for entry in frames {
+            // A closed tab's held slot has no element until its group's next tab takes it over.
+            if closedSlot(entry.id) != nil { continue }
             var elem = trackedWindows[entry.id]
             if elem == nil {
                 let appElem = AXElement.application(pid: entry.pid)
@@ -315,8 +351,9 @@ extension WindowManager {
     }
 
     /// Pins a sliding window at the stash sliver of each stashed end while its strip position
-    /// lies beyond it. A top/bottom stash (the side edge is shared with another display) leaves
-    /// the strip's row, so the window swaps to it while its strip position lies half past `display`'s edge.
+    /// lies beyond it. A stash at the opposite side edge or at the top/bottom (its own side edge
+    /// is shared with another display) is off the window's path, so the window swaps to it while
+    /// its strip position lies half past `display`'s edge.
     private func slideParking(
         from parkedFrom: CGRect?,
         fromNatural: CGPoint,
@@ -327,7 +364,9 @@ extension WindowManager {
         var parking = ScrollAnimator.Parking()
         func pin(_ parked: CGRect?, natural: CGPoint) {
             guard let parked else { return }
-            guard abs(parked.minY - natural.y) < 0.5 else {
+            let onPath = abs(parked.minY - natural.y) < 0.5
+                && display.map { (parked.midX < $0.midX) == (natural.x + parked.width / 2 < $0.midX) } ?? true
+            guard onPath else {
                 // Half past the edge is where macOS takes the window, matching the layout's rule.
                 guard let display else { return }
                 let half = parked.width / 2

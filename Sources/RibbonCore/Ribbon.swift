@@ -53,6 +53,28 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
+    public mutating func focusFirst() {
+        guard !columns.isEmpty else { return }
+        activeColumnIndex = 0
+    }
+
+    public mutating func focusLast() {
+        guard !columns.isEmpty else { return }
+        activeColumnIndex = columns.count - 1
+    }
+
+    /// Moves one grid row up; the top row stays put.
+    public mutating func focusRowUp(perRow: Int) {
+        guard perRow > 0, activeColumnIndex >= perRow else { return }
+        activeColumnIndex -= perRow
+    }
+
+    /// Moves one grid row down, to the last cell when the row below is shorter; the bottom row stays put.
+    public mutating func focusRowDown(perRow: Int) {
+        guard perRow > 0, activeColumnIndex / perRow < (columns.count - 1) / perRow else { return }
+        activeColumnIndex = min(columns.count - 1, activeColumnIndex + perRow)
+    }
+
     // MARK: - Reordering & Manipulation
 
     public mutating func swapLeft() {
@@ -85,10 +107,47 @@ public struct Ribbon: Sendable, Codable {
         columns[activeColumnIndex] = col
     }
 
-    public mutating func cycleWidth(ratios: [Double]) {
-        guard columns.indices.contains(activeColumnIndex) else { return }
+    public mutating func moveFirst() {
+        guard columns.indices.contains(activeColumnIndex), activeColumnIndex > 0 else { return }
+        let col = columns.remove(at: activeColumnIndex)
+        columns.insert(col, at: 0)
+        activeColumnIndex = 0
+    }
+
+    public mutating func moveLast() {
+        guard columns.indices.contains(activeColumnIndex), activeColumnIndex < columns.count - 1 else { return }
+        let col = columns.remove(at: activeColumnIndex)
+        columns.append(col)
+        activeColumnIndex = columns.count - 1
+    }
+
+    /// The active column's width ratio as laid out: a lone column without an explicit width fills the canvas.
+    public var effectiveWidthRatio: Double? {
+        guard columns.indices.contains(activeColumnIndex) else { return nil }
         let isSingleAutoExpanded = (columns.count == 1 && !columns[0].hasExplicitSingleWidth)
-        let effectiveCurrentRatio = isSingleAutoExpanded ? 1.0 : columns[activeColumnIndex].widthRatio
+        return isSingleAutoExpanded ? 1.0 : columns[activeColumnIndex].widthRatio
+    }
+
+    /// Changes the active column's width ratio by `delta`, clamped to [0.15, 1.0], and returns the
+    /// change actually applied.
+    @discardableResult
+    public mutating func adjustWidth(by delta: Double) -> Double {
+        guard let current = effectiveWidthRatio else { return 0.0 }
+        // Rounding to a thousandth keeps repeated steps from drifting (0.5 + 0.1 + 0.1 - 0.2
+        // lands below 0.5 and floors a pixel short).
+        let newRatio = max(0.15, min(1.0, ((current + delta) * 1000).rounded() / 1000))
+        // A clamped no-op keeps the stored ratio, which a lone auto-expanded column needs once a
+        // second column joins.
+        guard abs(newRatio - current) >= 0.0001 else { return 0.0 }
+        columns[activeColumnIndex].widthRatio = newRatio
+        if columns.count == 1 {
+            columns[activeColumnIndex].hasExplicitSingleWidth = (abs(newRatio - 1.0) >= 0.01)
+        }
+        return newRatio - current
+    }
+
+    public mutating func cycleWidth(ratios: [Double]) {
+        guard let effectiveCurrentRatio = effectiveWidthRatio else { return }
 
         let nextRatio: Double
         if let idx = ratios.firstIndex(where: { abs($0 - effectiveCurrentRatio) < 0.01 }) {
@@ -261,6 +320,34 @@ public struct Ribbon: Sendable, Codable {
                 return
             }
         }
+    }
+
+    /// Puts `window` into the slot holding `id`, keeping the column's width and the row. A copy of
+    /// `window` elsewhere in the ribbon is removed first. The slot is active afterwards when either
+    /// window was active before. Returns false, changing nothing, when `id` is absent.
+    @discardableResult
+    public mutating func replaceWindow(id: CGWindowID, with window: WindowModel) -> Bool {
+        guard slot(of: id) != nil else { return false }
+        let activeID = activeWindow?.id
+        let wasActive = activeID == id || activeID == window.id
+        if window.id != id {
+            removeWindow(id: window.id)
+        }
+        guard let (cIdx, rIdx) = slot(of: id) else { return false }
+        columns[cIdx].windows[rIdx] = window
+        if wasActive {
+            focus(windowID: window.id)
+        }
+        return true
+    }
+
+    private func slot(of id: CGWindowID) -> (column: Int, row: Int)? {
+        for (cIdx, col) in columns.enumerated() {
+            if let rIdx = col.windows.firstIndex(where: { $0.id == id }) {
+                return (cIdx, rIdx)
+            }
+        }
+        return nil
     }
 
     public mutating func removeWindows(pid: pid_t) {

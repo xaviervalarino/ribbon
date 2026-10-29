@@ -89,10 +89,16 @@ public final class AXElement: @unchecked Sendable {
             return point
         }
         set {
-            guard var newPoint = newValue else { return }
-            guard let axVal = AXValueCreate(.cgPoint, &newPoint) else { return }
-            AXUIElementSetAttributeValue(rawElement, kAXPositionAttribute as CFString, axVal)
+            guard let newPoint = newValue else { return }
+            setPosition(newPoint)
         }
+    }
+
+    @discardableResult
+    public func setPosition(_ p: CGPoint) -> AXError {
+        var point = p
+        guard let axVal = AXValueCreate(.cgPoint, &point) else { return .failure }
+        return AXUIElementSetAttributeValue(rawElement, kAXPositionAttribute as CFString, axVal)
     }
 
     public var size: CGSize? {
@@ -107,10 +113,16 @@ public final class AXElement: @unchecked Sendable {
             return size
         }
         set {
-            guard var newSize = newValue else { return }
-            guard let axVal = AXValueCreate(.cgSize, &newSize) else { return }
-            AXUIElementSetAttributeValue(rawElement, kAXSizeAttribute as CFString, axVal)
+            guard let newSize = newValue else { return }
+            setSize(newSize)
         }
+    }
+
+    @discardableResult
+    public func setSize(_ s: CGSize) -> AXError {
+        var size = s
+        guard let axVal = AXValueCreate(.cgSize, &size) else { return .failure }
+        return AXUIElementSetAttributeValue(rawElement, kAXSizeAttribute as CFString, axVal)
     }
 
     public var frame: CGRect? {
@@ -118,14 +130,17 @@ public final class AXElement: @unchecked Sendable {
         return CGRect(origin: p, size: s)
     }
 
-    public func setFrame(_ rect: CGRect) {
+    @discardableResult
+    public func setFrame(_ rect: CGRect) -> AXError {
         // WindowServer clamps size if current origin leaves insufficient space,
         // and clamps origin if current size exceeds destination boundaries.
         // Apply position first so expanding windows can grow, size to update dimensions,
         // then position again so shrinking windows placed near screen edges clear clamps.
-        position = rect.origin
-        size = rect.size
-        position = rect.origin
+        // The final position write decides where the window ends up, so its result is the one
+        // reported; a size the window refuses (a fixed-size window) is no failure a retry fixes.
+        setPosition(rect.origin)
+        setSize(rect.size)
+        return setPosition(rect.origin)
     }
 
     public var isHidden: Bool {

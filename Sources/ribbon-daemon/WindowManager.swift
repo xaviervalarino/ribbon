@@ -89,8 +89,11 @@ public final class WindowManager {
     var trackedWindows: [CGWindowID: AXElement] = [:]
     var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
     var adoptedSinceLastSweep: Set<CGWindowID> = []
+    /// Native-tab bookkeeping per window; a window has at most one state.
+    var tabStates: [CGWindowID: TabState] = [:]
     var gcTimer: DispatchSourceTimer?
     var retileWork: DispatchWorkItem?
+    var retileAnimated = false
     var resizeDebounceWork: DispatchWorkItem?
     var isDisplayReconfiguring: Bool = false
     var dragDirty = false
@@ -122,6 +125,7 @@ public final class WindowManager {
     private var lastSampledDisplaySnapshot: DisplaySnapshot?
     private var screenParametersObserver: NSObjectProtocol?
     private var wakeObserver: NSObjectProtocol?
+    private var screensWakeObserver: NSObjectProtocol?
     var lastAppliedFrames: [CGWindowID: CGRect] = [:]
     var lastStashedState: [CGWindowID: Bool] = [:]
     var lastNaturalFrames: [CGWindowID: CGRect] = [:]
@@ -130,6 +134,7 @@ public final class WindowManager {
     /// window, so any focus change from these apps before the deadline is an echo.
     var pendingFocusEchoPIDs: [pid_t: DispatchTime] = [:]
     var pendingFrameEchoes: [CGWindowID: DispatchTime] = [:]
+    var writeRetries: [CGWindowID: (count: Int, last: DispatchTime)] = [:]
     var originalFrames: [CGWindowID: CGRect] = [:]
     var isStopped = false
     var appDrivers: [pid_t: AppDriver] = [:]
@@ -139,9 +144,15 @@ public final class WindowManager {
         if let driver = appDrivers[pid] {
             return driver
         }
-        let driver = AppDriver(pid: pid) { [weak self] id, height in
-            DispatchQueue.main.async { self?.recordMinHeight(height, forWindowID: id) }
-        }
+        let driver = AppDriver(
+            pid: pid,
+            onMinHeight: { [weak self] id, height in
+                DispatchQueue.main.async { self?.recordMinHeight(height, forWindowID: id) }
+            },
+            onWriteFailed: { [weak self] id, frame, error in
+                DispatchQueue.main.async { self?.writeFailed(id: id, frame: frame, error: error) }
+            }
+        )
         appDrivers[pid] = driver
         return driver
     }
@@ -270,6 +281,15 @@ public final class WindowManager {
             self.displayConfigurationChanged()
         }
 
+        // A display link stops ticking while its display sleeps; waking it posts no reconfiguration.
+        screensWakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.scrollAnimator.displaysChanged()
+        }
+
         retileNow()
     }
 
@@ -347,6 +367,7 @@ public final class WindowManager {
         gcTimer = nil
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
         panController.stop()
@@ -366,6 +387,10 @@ public final class WindowManager {
         }
         inputTap.unfreezePointer()
         inputTap.stop()
+        if let obs = screensWakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(obs)
+            screensWakeObserver = nil
+        }
         observer.stop()
 
         if !forRestart {
@@ -390,6 +415,7 @@ public final class WindowManager {
         }
 
         appDrivers.removeAll()
+        tabStates.removeAll()
 
         CGDisplayRemoveReconfigurationCallback(
             displayReconfigurationCallback,
@@ -414,12 +440,16 @@ public final class WindowManager {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
+        scrollAnimator.displaysChanged()
     }
 
     func displayConfigurationChanged() {
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
+        retileAnimated = false
+        scrollAnimator.displaysChanged()
 
         displaySamplingCount = 0
         lastSampledDisplaySnapshot = nil

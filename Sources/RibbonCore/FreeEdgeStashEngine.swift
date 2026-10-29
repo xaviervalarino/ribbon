@@ -101,9 +101,11 @@ public enum FreeEdgeStashEngine {
         allDisplays: [DisplayBounds]
     ) -> QuartzPoint {
         let free = freeEdges(for: targetDisplay.id, in: allDisplays)
+        // Side edges come first: WindowServer keeps title bars on screen, so a top stash stays
+        // fully visible and a bottom stash shows 28pt (measured on a 1512x982 display).
         let preferred: [ScreenEdge] = (wing == .left)
-            ? [.left, .bottom, .top, .right]
-            : [.right, .bottom, .top, .left]
+            ? [.left, .right, .bottom, .top]
+            : [.right, .left, .bottom, .top]
 
         let chosenEdge = preferred.first { edge in
             guard free.contains(edge) else { return false }
