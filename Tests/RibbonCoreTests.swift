@@ -367,11 +367,14 @@ func runTests() {
     navRibbon.focusRowDown(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 4, "focusRowDown moves down one row")
     navRibbon.focusRowDown(perRow: 3)
-    TestRunner.assertEqual(navRibbon.activeColumnIndex, 6, "focusRowDown clamps at the last column")
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 6, "focusRowDown into a shorter last row lands on its last cell")
+    navRibbon.focusRowDown(perRow: 3)
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 6, "focusRowDown in the bottom row stays put")
     navRibbon.focusRowUp(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 3, "focusRowUp moves up one row")
+    navRibbon.activeColumnIndex = 2
     navRibbon.focusRowUp(perRow: 3)
-    TestRunner.assertEqual(navRibbon.activeColumnIndex, 0, "focusRowUp clamps at the first column")
+    TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
 
     guard TestRunner.summary() else {
         exit(1)

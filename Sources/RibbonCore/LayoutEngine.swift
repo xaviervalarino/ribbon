@@ -112,7 +112,7 @@ public struct LayoutEngine: Sendable {
         var result: [(x: Double, width: Double)] = []
         result.reserveCapacity(ribbon.columns.count)
 
-        // Feeds minimalScrollOffset; computePlan uses overviewGrid instead.
+        // computePlan lays overview out with overviewGrid, and minimalScrollOffset returns 0 in overview.
         if ribbon.isOverview {
             let count = ribbon.columns.count
             let totalGaps = Double(max(0, count - 1)) * config.windowGap

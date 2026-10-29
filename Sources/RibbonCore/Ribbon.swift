@@ -53,13 +53,15 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
+    /// Moves one grid row up; the top row stays put.
     public mutating func focusRowUp(perRow: Int) {
-        guard !columns.isEmpty, perRow > 0 else { return }
-        activeColumnIndex = max(0, activeColumnIndex - perRow)
+        guard perRow > 0, activeColumnIndex >= perRow else { return }
+        activeColumnIndex -= perRow
     }
 
+    /// Moves one grid row down, to the last cell when the row below is shorter; the bottom row stays put.
     public mutating func focusRowDown(perRow: Int) {
-        guard !columns.isEmpty, perRow > 0 else { return }
+        guard perRow > 0, activeColumnIndex / perRow < (columns.count - 1) / perRow else { return }
         activeColumnIndex = min(columns.count - 1, activeColumnIndex + perRow)
     }
 
