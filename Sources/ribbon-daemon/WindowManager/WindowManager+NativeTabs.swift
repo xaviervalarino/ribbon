@@ -86,11 +86,11 @@ extension WindowManager {
             for old in offTiled {
                 let candidates = shownTabs.filter { !placed.contains($0) }
                 let oldBounds = boundsByID[old]
-                // Tabs share their group's exact frame. A size-only match stands only for the app's
+                // Tabs share their group's x and width. A size-only match stands only for the app's
                 // single shown tab; with several, it can pick another group's tab.
                 let frameMatch = candidates.first { candidate in
                     guard let oldBounds, let bounds = boundsByID[candidate] else { return false }
-                    return bounds.isNear(oldBounds)
+                    return bounds.isSameColumn(oldBounds)
                 }
                 let sizeMatch = shownTabs.count == 1 ? candidates.first { candidate in
                     guard let oldSize = oldBounds?.size, let size = boundsByID[candidate]?.size else { return false }
@@ -211,7 +211,8 @@ extension WindowManager {
     /// Gives a new window its group's slot when it is a native tab: at once when the sibling has
     /// ordered out, else held until the reconcile sees it do so. False for an ordinary window.
     func claimNewTab(_ element: AXElement, id: CGWindowID, pid: pid_t, focus: CGWindowID?) -> Bool {
-        guard let sibling = tabSibling(of: element, pid: pid) else { return false }
+        // A tab its focus event already claimed holds a slot; claiming it again would move it.
+        guard trackedWindows[id] == nil, let sibling = tabSibling(of: element, id: id, pid: pid) else { return false }
         if sibling.orderedOut, swapTab(out: sibling.id, in: id, element: element, pid: pid, focus: focus) {
             scheduleTabReconcile(pid: pid)
             scheduleRetile()
@@ -221,45 +222,43 @@ extension WindowManager {
         return true
     }
 
-    /// The tiled window that a new window `element` is a tab of. A new tab orders its group's shown
-    /// tab out before it orders in, so the app's tiled window ordered out on a visible space is the
-    /// sibling (`orderedOut`); with several, the one at the same origin and width (a tab bar showing
-    /// can change the height). Failing that, a tiled window at the same frame within 2pt (macOS
-    /// cascades a genuine new window to a different origin), whose order-out the reconcile awaits.
-    func tabSibling(of element: AXElement, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
-        let ownID = cachedWindowID(for: element)
-        let tiled = allRibbonWindows.filter { $0.pid == pid && $0.id != ownID }.map(\.id).sorted()
+    /// The tiled window that new window `id` is a tab of. A new tab orders its group's shown tab
+    /// out before it orders in, so an app's tiled window ordered out on a visible space at the new
+    /// window's origin and width is the sibling, swapped at once (`orderedOut`). A lone ordered-out
+    /// window at another frame, or a tiled window at the same frame within 2pt, makes the new window
+    /// a candidate that the reconcile settles; Ribbon writes nothing to it meanwhile. Otherwise the
+    /// window is ordinary: macOS cascades a genuine new window to a different origin.
+    func tabSibling(of element: AXElement, id: CGWindowID, pid: pid_t) -> (id: CGWindowID, orderedOut: Bool)? {
+        let tiled = Set(allRibbonWindows.filter { $0.pid == pid && $0.id != id }.map(\.id)).sorted()
         guard !tiled.isEmpty, let onScreen = onScreenWindowIDs() else { return nil }
-        let frame = element.frame
-        let tiledFrames = Dictionary(uniqueKeysWithValues: tiled.compactMap { id in serverFrame(id).map { (id, $0) } })
 
         let appHidden = NSRunningApplication(processIdentifier: pid)?.isHidden ?? true
         let visibleSpaces = Set(SpaceManager.currentTopology().activeSpaceByDisplay.values)
-        let orderedOut = appHidden ? [] : tiled.filter { id in
-            tiledFrames[id] != nil && !onScreen.contains(id)
-                && spaceByWindowID[id].map(visibleSpaces.contains) ?? false
-        }
-        if orderedOut.count == 1 {
-            return (orderedOut[0], true)
-        }
-        if let frame, let id = orderedOut.first(where: { id in
-            guard let tiledFrame = tiledFrames[id] else { return false }
-            return abs(tiledFrame.minX - frame.minX) <= 2 && abs(tiledFrame.width - frame.width) <= 2
-        }) {
-            return (id, true)
-        }
-        if let frame, let id = tiled.first(where: { tiledFrames[$0]?.isNear(frame) ?? false }) {
-            return (id, false)
+        // A window moved to another space reports only that space; it is not ordered out.
+        let orderedOut: [(id: CGWindowID, frame: CGRect)] = appHidden ? [] : tiled.compactMap { tiledID in
+            guard !onScreen.contains(tiledID), let sID = spaceByWindowID[tiledID], visibleSpaces.contains(sID),
+                  let tiledFrame = serverFrame(tiledID) else { return nil }
+            let spaces = SpaceManager.spaceIDs(for: tiledID)
+            guard spaces.isEmpty || spaces.contains(where: visibleSpaces.contains) else { return nil }
+            return (tiledID, tiledFrame)
         }
 
-        let format = { (r: CGRect) in "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))" }
-        let siblings = tiled.map { id in
-            "\(id):\(tiledFrames[id].map(format) ?? "none")\(onScreen.contains(id) ? "" : " out")"
+        let frame = element.frame
+        if let frame, let match = orderedOut.first(where: { $0.frame.isSameColumn(frame) }) {
+            return (match.id, true)
         }
-        RibbonLog.log(
-            "native tab check wid=\(ownID.map(String.init) ?? "?") frame=\(frame.map(format) ?? "none") no sibling in [\(siblings.joined(separator: ", "))]",
-            category: "tabs"
-        )
+        if orderedOut.count == 1 {
+            return (orderedOut[0].id, false)
+        }
+        if let frame, let match = tiled.first(where: { serverFrame($0)?.isNear(frame) ?? false }) {
+            return (match, false)
+        }
+
+        if !orderedOut.isEmpty {
+            let format = { (r: CGRect) in "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))" }
+            let out = orderedOut.map { "\($0.id):\(format($0.frame))" }.joined(separator: ", ")
+            RibbonLog.log("native tab check wid=\(id) frame=\(frame.map(format) ?? "none") no sibling among ordered out [\(out)]", category: "tabs")
+        }
         return nil
     }
 
@@ -282,6 +281,12 @@ extension CGSize {
 }
 
 extension CGRect {
+    /// True when origin x and width each differ from `other` by at most 2pt. A tab group's frame
+    /// keeps its x and width as tabs come and go; a tab bar showing can change its height.
+    func isSameColumn(_ other: CGRect) -> Bool {
+        abs(minX - other.minX) <= 2 && abs(width - other.width) <= 2
+    }
+
     /// True when origin and size each differ from `other` by at most 2pt.
     func isNear(_ other: CGRect) -> Bool {
         abs(minX - other.minX) <= 2 && abs(minY - other.minY) <= 2 && size.isNear(other.size)
