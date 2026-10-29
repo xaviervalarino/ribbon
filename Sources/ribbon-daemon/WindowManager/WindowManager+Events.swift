@@ -153,7 +153,9 @@ extension WindowManager: AXEventObserverDelegate {
                     activeSpaceID = newSID
                     lastAppliedFrames.removeValue(forKey: id)
                     let isDragging = CGEventSource.buttonState(.combinedSessionState, button: .left)
-                    if !isDragging {
+                    if isDragging {
+                        dragDirty = true
+                    } else {
                         scheduleRetile()
                     }
                     return
@@ -164,6 +166,9 @@ extension WindowManager: AXEventObserverDelegate {
         // Manual move: mark dirty in diff cache; keyboard retiles snap it back,
         // but avoid fighting the mouse cursor mid-drag.
         lastAppliedFrames.removeValue(forKey: id)
+        if CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            dragDirty = true
+        }
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
@@ -325,4 +330,21 @@ extension WindowManager: AXEventObserverDelegate {
         }
         scheduleRetile()
     }
+}
+
+// MARK: - InputTapDelegate
+
+extension WindowManager: InputTapDelegate {
+    func mouseUp() {
+        if dragDirty {
+            dragDirty = false
+            scheduleRetile()
+        }
+    }
+
+    func mouseMoved(dx: Double, dy: Double) {}
+
+    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase, momentum: CGMomentumScrollPhase) {}
+
+    func gesture(_ event: CGEvent) {}
 }
