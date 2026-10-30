@@ -33,7 +33,7 @@ bin/ribbon: $(CLI_SOURCES) | bin
 	codesign --force --sign "$(CODESIGN_ID)" bin/ribbon
 
 bin/ribbon-daemon: $(DAEMON_SOURCES) | bin
-	swiftc -O -o bin/ribbon-daemon -framework ApplicationServices -framework AppKit -framework Foundation -framework CoreGraphics -framework ColorSync Sources/RibbonCore/*.swift Sources/RibbonAccessibility/*.swift Sources/ribbon-daemon/*.swift $$(ls Sources/ribbon-daemon/WindowManager/*.swift 2>/dev/null)
+	swiftc -O -o bin/ribbon-daemon -framework ApplicationServices -framework AppKit -framework Foundation -framework CoreGraphics -framework ColorSync -framework ScreenCaptureKit Sources/RibbonCore/*.swift Sources/RibbonAccessibility/*.swift Sources/ribbon-daemon/*.swift $$(ls Sources/ribbon-daemon/WindowManager/*.swift 2>/dev/null)
 	codesign --force --sign "$(CODESIGN_ID)" bin/ribbon-daemon
 
 bin/Ribbon.app/Contents/MacOS/ribbon-daemon: bin/ribbon-daemon

@@ -378,9 +378,9 @@ final class ScrollAnimator: @unchecked Sendable {
         let p = progress(at: nowMs)
         for (id, track) in tracks {
             // A window that ends parked has its slot ghosted by the retile instead.
-            if Self.seamPart(track, natural: track.toNatural) == nil,
-               let seam = Self.seamPart(track, natural: Self.natural(track, progress: p, durationMs: durationMs)) {
-                ghosts.show(id, frame: seam)
+            let natural = Self.natural(track, progress: p, durationMs: durationMs)
+            if Self.seamPart(track, natural: track.toNatural) == nil, let seam = Self.seamPart(track, natural: natural) {
+                ghosts.show(id, frame: seam, window: CGRect(origin: natural, size: track.final.frame.size))
                 seamGhosted.insert(id)
                 continue
             }
