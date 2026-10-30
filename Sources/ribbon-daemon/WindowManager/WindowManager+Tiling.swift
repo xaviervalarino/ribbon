@@ -179,7 +179,7 @@ extension WindowManager {
                 }
             }
         }
-        seamGhosts.sync(seamFrames)
+        seamGhosts.sync(seamFrames, windows: naturalFrames)
 
         applyFrames(framesToApply, naturalFrames: naturalFrames, displayFrames: displayFrames,
                     focusWindowID: focusWindowID, animated: animated)
