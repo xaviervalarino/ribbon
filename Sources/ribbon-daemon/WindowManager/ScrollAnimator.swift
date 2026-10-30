@@ -41,6 +41,8 @@ final class ScrollAnimator: @unchecked Sendable {
         let stash: CGPoint
         /// The strip origin x past which half the window lies beyond the shared edge.
         let limitX: CGFloat
+        /// The shared display edge.
+        let edgeX: CGFloat
     }
 
     struct Slide {
@@ -96,6 +98,8 @@ final class ScrollAnimator: @unchecked Sendable {
     var onSettledFocus: ((CGWindowID, pid_t) -> Void)?
     private let ghosts = SlotGhosts()
     private var ghosted: Set<CGWindowID> = []
+    /// Windows shown at a far-side stash whose strip slot by the shared edge holds a ghost.
+    private var seamGhosted: Set<CGWindowID> = []
     /// Ghosts held at their window's final frame until the app's finals drain.
     private var ghostsAwaitingFinals: [pid_t: [CGWindowID]] = [:]
 
@@ -372,6 +376,12 @@ final class ScrollAnimator: @unchecked Sendable {
     private func showGhosts(at nowMs: Double) {
         let p = progress(at: nowMs)
         for (id, track) in tracks {
+            if let seam = Self.seamPart(track, natural: Self.natural(track, progress: p, durationMs: durationMs)) {
+                ghosts.show(id, frame: seam)
+                seamGhosted.insert(id)
+                continue
+            }
+            if seamGhosted.remove(id) != nil, !ghosted.contains(id) { ghosts.hide([id]) }
             let stepLagging = sentAtMs[track.pid].map { nowMs - $0 >= Self.ghostLagMs } ?? false
             // A joining window WindowServer has not shown moved yet, which includes the app's redraw.
             let unseen = landingWatches[id].map { watch in
@@ -442,6 +452,8 @@ final class ScrollAnimator: @unchecked Sendable {
             ghostsAwaitingFinals[track.pid, default: []].append(id)
         }
         ghosted.removeAll()
+        ghosts.hide(Array(seamGhosted.subtracting(ghostsAwaitingFinals.values.joined())))
+        seamGhosted.removeAll()
         var finalsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
         for track in tracks.values {
             finalsByPID[track.pid, default: []].append(track.final)
@@ -569,6 +581,19 @@ final class ScrollAnimator: @unchecked Sendable {
     /// True when the track starts held at a stash sliver rather than at its strip position.
     private static func isPinnedAtStart(_ track: Track) -> Bool {
         abs(shown(track, progress: 0, durationMs: 0).x - track.fromNatural.x.rounded()) > 1
+    }
+
+    /// The part of a window's strip frame on its own display while it shows at a far-side stash
+    /// past a shared edge, or nil when it shows at its strip position.
+    private static func seamPart(_ track: Track, natural: CGPoint) -> CGRect? {
+        let frame = CGRect(origin: natural, size: track.final.frame.size)
+        if let swap = track.parking.aboveMaxX, natural.x > swap.limitX, swap.edgeX > frame.minX {
+            return CGRect(x: frame.minX, y: frame.minY, width: swap.edgeX - frame.minX, height: frame.height)
+        }
+        if let swap = track.parking.belowMinX, natural.x < swap.limitX, frame.maxX > swap.edgeX {
+            return CGRect(x: swap.edgeX, y: frame.minY, width: frame.maxX - swap.edgeX, height: frame.height)
+        }
+        return nil
     }
 
     /// The strip position pinned at the window's stash slivers, or its top/bottom stash past a shared edge.
