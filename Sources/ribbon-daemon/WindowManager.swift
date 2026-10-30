@@ -118,6 +118,8 @@ public final class WindowManager {
     var originalFrames: [CGWindowID: CGRect] = [:]
     var isStopped = false
     var appDrivers: [pid_t: AppDriver] = [:]
+    /// Ghosts the slots of columns parked past a shared display edge.
+    let seamGhosts = SlotGhosts()
     lazy var scrollAnimator = ScrollAnimator { [unowned self] pid in self.appDriver(for: pid) }
 
     func appDriver(for pid: pid_t) -> AppDriver {

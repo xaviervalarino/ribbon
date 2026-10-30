@@ -18,6 +18,12 @@ final class SlotGhosts {
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
+    /// Shows exactly `frames`, fading out every other ghost.
+    func sync(_ frames: [CGWindowID: CGRect]) {
+        hide(panels.keys.filter { frames[$0] == nil })
+        for (id, frame) in frames { show(id, frame: frame) }
+    }
+
     /// Fades the ghosts of `ids` out. A fading panel is reused only after its fade completes.
     func hide(_ ids: [CGWindowID]) {
         let fading = ids.compactMap { panels.removeValue(forKey: $0) }
