@@ -365,9 +365,9 @@ extension WindowManager {
                 guard let display else { return }
                 let half = parked.width / 2
                 if natural.x < display.minX {
-                    parking.belowMinX = .init(stash: parked.origin, limitX: display.minX - half)
+                    parking.belowMinX = .init(stash: parked.origin, limitX: display.minX - half, edgeX: display.minX)
                 } else if natural.x > display.maxX - parked.width {
-                    parking.aboveMaxX = .init(stash: parked.origin, limitX: display.maxX - half)
+                    parking.aboveMaxX = .init(stash: parked.origin, limitX: display.maxX - half, edgeX: display.maxX)
                 }
                 return
             }
