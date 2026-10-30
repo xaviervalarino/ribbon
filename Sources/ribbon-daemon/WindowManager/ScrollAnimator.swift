@@ -21,6 +21,8 @@ import QuartzCore
 ///   rapid presses read as one continuous glide instead of a stop and restart per press.
 /// - Each app is sent the position it should show when its step lands (its measured step
 ///   round trip ahead), so a busy app lands in line with its neighbors instead of trailing them.
+/// - A window whose app sits on a step past `ghostLagMs` gets a ghost block in its slot until the
+///   app's final mutations are applied, so a slow app never leaves the strip looking empty.
 ///
 /// Confined to the main queue: the display link, `animate`, and step completions all run there.
 final class ScrollAnimator: @unchecked Sendable {
@@ -82,6 +84,8 @@ final class ScrollAnimator: @unchecked Sendable {
     private static let stalledCheckMs = 50.0
     /// Wait before a link that looks silent is dropped.
     private static let confirmSilentMs = 20
+    /// How long an app may sit on a slide step before its windows' slots are ghosted.
+    private static let ghostLagMs = 30.0
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
@@ -90,6 +94,10 @@ final class ScrollAnimator: @unchecked Sendable {
     var onNextIdle: (() -> Void)?
     /// Runs when a held focus is sent, so its echoes are judged from then.
     var onSettledFocus: ((CGWindowID, pid_t) -> Void)?
+    private let ghosts = SlotGhosts()
+    private var ghosted: Set<CGWindowID> = []
+    /// Ghosts held at their window's final frame until the app's finals drain.
+    private var ghostsAwaitingFinals: [pid_t: [CGWindowID]] = [:]
 
     private var tracks: [CGWindowID: Track] = [:]
     private var startMs: Double = 0
@@ -331,6 +339,7 @@ final class ScrollAnimator: @unchecked Sendable {
 
         checkLandings(at: now)
         sendSteps(at: now)
+        showGhosts(at: now)
         if progress(at: now) >= 1 {
             finish()
         }
@@ -352,6 +361,19 @@ final class ScrollAnimator: @unchecked Sendable {
                 return AppDriver.SlideStep(element: track.element, windowID: id, origin: origin)
             }
             send(steps, to: pid)
+        }
+    }
+
+    /// Ghosts the slot of each window whose app has sat on its step past the lag; a ghosted window
+    /// keeps its ghost until the slide ends, so steps landing between lags do not flicker it.
+    private func showGhosts(at nowMs: Double) {
+        let p = progress(at: nowMs)
+        for (id, track) in tracks {
+            let lagging = sentAtMs[track.pid].map { nowMs - $0 >= Self.ghostLagMs } ?? false
+            guard lagging || ghosted.contains(id) else { continue }
+            ghosted.insert(id)
+            let origin = Self.shown(track, progress: p, durationMs: durationMs)
+            ghosts.show(id, frame: CGRect(origin: origin, size: track.final.frame.size))
         }
     }
 
@@ -405,6 +427,12 @@ final class ScrollAnimator: @unchecked Sendable {
             logLanding(id: id, watch, result: "none by slide end (\(Int(now - sentMs))ms) stepInFlight=\(inFlight)")
         }
         landingWatches.removeAll()
+        for id in ghosted {
+            guard let track = tracks[id] else { continue }
+            ghosts.show(id, frame: track.final.frame)
+            ghostsAwaitingFinals[track.pid, default: []].append(id)
+        }
+        ghosted.removeAll()
         var finalsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
         for track in tracks.values {
             finalsByPID[track.pid, default: []].append(track.final)
@@ -438,7 +466,12 @@ final class ScrollAnimator: @unchecked Sendable {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.finalsDraining[pid, default: 1] -= 1
-                if self.finalsDraining[pid] == 0 { self.finalsDraining.removeValue(forKey: pid) }
+                if self.finalsDraining[pid] == 0 {
+                    self.finalsDraining.removeValue(forKey: pid)
+                    // A window a newer slide ghosts again keeps its ghost.
+                    let held = self.ghostsAwaitingFinals.removeValue(forKey: pid) ?? []
+                    self.ghosts.hide(held.filter { !self.ghosted.contains($0) })
+                }
             }
         }
     }
