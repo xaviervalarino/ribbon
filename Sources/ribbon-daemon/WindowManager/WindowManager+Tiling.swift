@@ -97,7 +97,7 @@ extension WindowManager {
     public func retile(allSpaces: Bool = false, focusWindowID: CGWindowID? = nil, animated: Bool = false, quiet: Bool = false) {
         guard !isDisplayReconfiguring else { return }
         // A pan writes positions every flush; a slide there would be retargeted every 8ms.
-        let animated = animated && panningSpaceID == nil
+        let animated = animated && !panController.isPanning
         guard !NSScreen.screens.isEmpty else { return }
         // In AppKit, (0, 0) is at the bottom-left of the primary display.
         // The primary display's height serves as the universal Y-axis reflection plane.
@@ -146,7 +146,7 @@ extension WindowManager {
             let screenFullQuartzFrame = targetDisplay?.frame ?? QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryScreenHeight)
 
             let canvasW = screenQuartzFrame.width - (config.edgeMargin * 2)
-            if panningSpaceID != sID {
+            if panController.panningSpaceID != sID {
                 let sharedEdges = SharedEdges(screenFrame: screenQuartzFrame, config: config,
                                               targetDisplay: targetDisplay, allDisplays: allDisplayBounds)
                 r.viewportOffset = LayoutEngine.minimalScrollOffset(for: r, canvasWidth: canvasW, config: config,

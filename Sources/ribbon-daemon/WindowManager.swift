@@ -99,10 +99,6 @@ public final class WindowManager {
     var dragDirty = false
     var draggingWindowID: CGWindowID?
     var spaceChangeDeferred = false
-    var panHeld = false
-    var panHeldSince: DispatchTime?
-    var orphanPanEndAt: DispatchTime?
-    var panningSpaceID: SpaceID?
     lazy var panController = PanController(windowManager: self)
     struct TouchesProbeState {
         var isArmed = false
@@ -372,7 +368,7 @@ public final class WindowManager {
         retileAnimated = false
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
-        panController.stop()
+        panController.endPan(snap: false)
         touchesProbe.bucketTimer?.cancel()
         touchesProbe.bucketTimer = nil
         touchesProbe.endWork?.cancel()

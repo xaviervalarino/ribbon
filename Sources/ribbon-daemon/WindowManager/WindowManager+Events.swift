@@ -430,13 +430,7 @@ extension WindowManager: InputTapDelegate {
         }
     }
 
-    func mouseMoved(dx: Double, dy: Double) {
-        guard panHeld else { return }
-        panController.handleMotion(dx: dx)
-    }
-
-    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase) {
-        guard panHeld else { return }
+    func pointerMoved(dx: Double) {
         panController.handleMotion(dx: dx)
     }
 

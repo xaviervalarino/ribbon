@@ -6,9 +6,8 @@ private let swipeEventType = CGEventType(rawValue: 31)!
 
 protocol InputTapDelegate: AnyObject {
     func mouseUp()
-    func mouseMoved(dx: Double, dy: Double)
-    /// `phase` is nil for a wheel tick, which carries no scroll phase.
-    func scrolled(dx: Double, dy: Double, phase: CGScrollPhase?, momentum: CGMomentumScrollPhase)
+    /// Horizontal mouse or scroll travel.
+    func pointerMoved(dx: Double)
     func gesture(_ event: CGEvent)
     func swipe(_ event: CGEvent)
 }
@@ -53,11 +52,7 @@ final class InputTap {
     func setPointerMonitoring(_ on: Bool) {
         guard on != pointerMonitoring else { return }
         pointerMonitoring = on
-        if on {
-            freezePointer()
-        } else {
-            unfreezePointer()
-        }
+        on ? freezePointer() : unfreezePointer()
         start()
     }
 
@@ -138,20 +133,13 @@ final class InputTap {
             }
         case .leftMouseUp:
             delegate?.mouseUp()
-        case .mouseMoved, .leftMouseDragged:
-            if type == .mouseMoved, let frozenPointer {
+        case .mouseMoved:
+            if let frozenPointer {
                 CGWarpMouseCursorPosition(frozenPointer)
             }
-            let dx = event.getDoubleValueField(.mouseEventDeltaX)
-            let dy = event.getDoubleValueField(.mouseEventDeltaY)
-            delegate?.mouseMoved(dx: dx, dy: dy)
+            delegate?.pointerMoved(dx: event.getDoubleValueField(.mouseEventDeltaX))
         case .scrollWheel:
-            let dx = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
-            let dy = event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
-            let phaseRaw = UInt32(truncatingIfNeeded: event.getIntegerValueField(.scrollWheelEventScrollPhase))
-            let momentumRaw = UInt32(truncatingIfNeeded: event.getIntegerValueField(.scrollWheelEventMomentumPhase))
-            let momentum = CGMomentumScrollPhase(rawValue: momentumRaw) ?? .none
-            delegate?.scrolled(dx: dx, dy: dy, phase: CGScrollPhase(rawValue: phaseRaw), momentum: momentum)
+            delegate?.pointerMoved(dx: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2))
         case gestureEventType:
             delegate?.gesture(event)
         case swipeEventType:

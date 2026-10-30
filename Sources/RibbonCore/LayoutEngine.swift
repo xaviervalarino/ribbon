@@ -214,11 +214,7 @@ public struct LayoutEngine: Sendable {
         if let nearest = fullyVisible.min(by: { abs($0 - active) < abs($1 - active) }) {
             return nearest
         }
-        var best = active
-        for index in geometry.indices where visibleWidth(index) > visibleWidth(best) {
-            best = index
-        }
-        return best
+        return geometry.indices.reduce(active) { visibleWidth($1) > visibleWidth($0) ? $1 : $0 }
     }
 
     /// Scrolls just enough to show the active column, then further when a column would sit half or
