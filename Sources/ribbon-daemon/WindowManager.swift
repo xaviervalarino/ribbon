@@ -218,7 +218,6 @@ public final class WindowManager {
         scrollAnimator.onSettledFocus = { [weak self] id, pid in
             self?.expectFocusEcho(id: id, pid: pid, ms: 300)
         }
-        scrollAnimator.ghostLagMs = { [weak self] in self?.config.ghostLagMs ?? 0 }
 
         // Start event observer
         observer.start()

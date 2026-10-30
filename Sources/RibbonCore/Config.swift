@@ -47,9 +47,6 @@ public struct Config: Sendable, Codable {
     public var resizeMode: ResizeMode
     public var focusTiming: FocusTiming
     public var overviewColumnsPerRow: Int
-    /// A sliding window whose app has sat on a slide step this long gets a ghost block in its slot
-    /// until the slide ends; 0 turns ghosts off.
-    public var ghostLagMs: Int
 
     public init(
         windowGap: Double = 4.0,
@@ -86,8 +83,7 @@ public struct Config: Sendable, Codable {
         scrollAnimationMs: Int = 55,
         resizeMode: ResizeMode = .end,
         focusTiming: FocusTiming = .end,
-        overviewColumnsPerRow: Int = 3,
-        ghostLagMs: Int = 30
+        overviewColumnsPerRow: Int = 3
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -104,7 +100,6 @@ public struct Config: Sendable, Codable {
         self.resizeMode = resizeMode
         self.focusTiming = focusTiming
         self.overviewColumnsPerRow = overviewColumnsPerRow
-        self.ghostLagMs = ghostLagMs
     }
 
     public static let `default` = Config()

@@ -84,6 +84,8 @@ final class ScrollAnimator: @unchecked Sendable {
     private static let stalledCheckMs = 50.0
     /// Wait before a link that looks silent is dropped.
     private static let confirmSilentMs = 20
+    /// How long an app may sit on a slide step before its windows' slots are ghosted.
+    private static let ghostLagMs = 30.0
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
@@ -92,8 +94,6 @@ final class ScrollAnimator: @unchecked Sendable {
     var onNextIdle: (() -> Void)?
     /// Runs when a held focus is sent, so its echoes are judged from then.
     var onSettledFocus: ((CGWindowID, pid_t) -> Void)?
-    /// Step lag that ghosts a window's slot; 0 turns ghosts off.
-    var ghostLagMs: () -> Int = { 0 }
     private let ghosts = SlotGhosts()
     private var ghosted: Set<CGWindowID> = []
 
@@ -338,11 +338,9 @@ final class ScrollAnimator: @unchecked Sendable {
     /// Ghosts the slot of each window whose app has sat on its step past the lag; a ghosted window
     /// keeps its ghost until the slide ends, so steps landing between lags do not flicker it.
     private func showGhosts(at nowMs: Double) {
-        let lagMs = Double(ghostLagMs())
-        guard lagMs > 0 else { return }
         let p = progress(at: nowMs)
         for (id, track) in tracks {
-            let lagging = sentAtMs[track.pid].map { nowMs - $0 >= lagMs } ?? false
+            let lagging = sentAtMs[track.pid].map { nowMs - $0 >= Self.ghostLagMs } ?? false
             guard lagging || ghosted.contains(id) else { continue }
             ghosted.insert(id)
             let origin = Self.shown(track, progress: p, durationMs: durationMs)
