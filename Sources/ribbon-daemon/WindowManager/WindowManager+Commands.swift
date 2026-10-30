@@ -143,7 +143,7 @@ extension WindowManager {
     }
 
     /// Canvas width of the display showing `sID`, as `windowResized` measures it.
-    private func canvasWidth(forSpace sID: SpaceID) -> Double? {
+    func canvasWidth(forSpace sID: SpaceID) -> Double? {
         let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
         guard let screen = screen(forDisplayID: dID) ?? NSScreen.main else { return nil }
         let width = screen.visibleFrame.width - (config.edgeMargin * 2)
@@ -170,17 +170,10 @@ extension WindowManager {
             case "settings":
                 return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
             case "touches":
-                guard args.count == 2 else { return "error: usage: debug touches on|off" }
-                switch args[1].lowercased() {
-                case "on":
-                    setTouchesProbe(true)
-                    return "ok"
-                case "off":
-                    setTouchesProbe(false)
-                    return "ok"
-                default:
-                    return "error: usage: debug touches on|off"
-                }
+                let state = args.count == 2 ? args[1].lowercased() : ""
+                guard state == "on" || state == "off" else { return "error: usage: debug touches on|off" }
+                setTouchesProbe(state == "on")
+                return "ok"
             default:
                 break
             }
@@ -296,23 +289,8 @@ extension WindowManager {
             // pointer motion pans the strip instead of moving the cursor.
             guard parts.count == 2 else { return "error: usage: pan begin|end" }
             switch parts[1].lowercased() {
-            case "begin":
-                // Each command is its own CLI process, so a quick tap's `pan end` can overtake its
-                // `pan begin`; a begin right after an end that found no hold is that stale press.
-                if let orphan = orphanPanEndAt, DispatchTime.now() < orphan + .milliseconds(250) {
-                    orphanPanEndAt = nil
-                    return "ok"
-                }
-                panHeld = true
-                panHeldSince = .now()
-                panController.resetIfIdle()
-                inputTap.setPointerMonitoring(true)
-            case "end":
-                orphanPanEndAt = panHeld ? nil : .now()
-                panHeld = false
-                panHeldSince = nil
-                inputTap.setPointerMonitoring(false)
-                panController.endPan(snap: true)
+            case "begin": panController.beginHold()
+            case "end": panController.endHold()
             default:
                 return "error: usage: pan begin|end"
             }

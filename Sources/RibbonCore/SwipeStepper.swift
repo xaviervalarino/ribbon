@@ -13,14 +13,9 @@ public struct SwipeStepper: Sendable, Equatable {
         case focusRight
     }
 
-    private enum Axis: Sendable, Equatable {
-        case x
-        case y
-    }
-
     private var travelX: Double = 0
     private var travelY: Double = 0
-    private var axis: Axis?
+    private var isHorizontal: Bool?
     private var lastDir: Int?
 
     public init() {}
@@ -29,26 +24,20 @@ public struct SwipeStepper: Sendable, Equatable {
         guard fingers == config.swipeFingers, fingers > 0 else {
             travelX = 0
             travelY = 0
-            axis = nil
+            isHorizontal = nil
             lastDir = nil
             return nil
         }
 
         travelX += dx / Double(fingers)
         travelY += dy / Double(fingers)
-        if axis == nil, max(abs(travelX), abs(travelY)) >= config.swipeFirst {
-            axis = abs(travelX) > abs(travelY) ? .x : .y
+        if isHorizontal == nil, max(abs(travelX), abs(travelY)) >= config.swipeFirst {
+            isHorizontal = abs(travelX) > abs(travelY)
         }
-        guard axis == .x else { return nil }
+        guard isHorizontal == true else { return nil }
 
         let dir = travelX < 0 ? -1 : 1
-        let threshold: Double
-        if let last = lastDir {
-            threshold = (dir == last) ? config.swipeStep : config.swipeReverse
-        } else {
-            threshold = config.swipeFirst
-        }
-
+        let threshold = lastDir == nil ? config.swipeFirst : (dir == lastDir ? config.swipeStep : config.swipeReverse)
         guard abs(travelX) >= threshold else { return nil }
         lastDir = dir
         travelX = 0

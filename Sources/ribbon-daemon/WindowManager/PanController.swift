@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 import CoreGraphics
 
 /// Pans the active Space's strip horizontally while a pan is held (`pan begin` to `pan end`),
@@ -15,7 +14,12 @@ final class PanController {
     private static let holdTimeoutNs: UInt64 = 10_000_000_000
 
     private weak var windowManager: WindowManager?
-    private(set) var isPanning = false
+    /// The Space being panned; retile keeps its offset where the pan put it.
+    private(set) var panningSpaceID: WindowManager.SpaceID?
+    var isPanning: Bool { panningSpaceID != nil }
+    /// When the current hold began; nil while no hold is active.
+    private var heldSince: DispatchTime?
+    private var orphanEndAt: DispatchTime?
     private var accumulatedDX = 0.0
     private var lastMotionTime: DispatchTime = .now()
     private var needsFlush = false
@@ -26,15 +30,34 @@ final class PanController {
         self.windowManager = windowManager
     }
 
-    func resetIfIdle() {
-        guard !isPanning else { return }
-        accumulatedDX = 0
-        lastMotionTime = .now()
+    func beginHold() {
+        // Each command is its own CLI process, so a quick tap's `pan end` can overtake its
+        // `pan begin`; a begin right after an end that found no hold is that stale press.
+        if let orphan = orphanEndAt, DispatchTime.now() < orphan + .milliseconds(250) {
+            orphanEndAt = nil
+            return
+        }
+        heldSince = .now()
+        if !isPanning {
+            accumulatedDX = 0
+            lastMotionTime = .now()
+        }
+        windowManager?.inputTap.setPointerMonitoring(true)
+    }
+
+    func endHold() {
+        orphanEndAt = heldSince == nil ? .now() : nil
+        releaseHold()
+    }
+
+    private func releaseHold() {
+        heldSince = nil
+        windowManager?.inputTap.setPointerMonitoring(false)
+        endPan(snap: true)
     }
 
     func handleMotion(dx: Double) {
-        guard !expireHoldIfNeeded() else { return }
-        guard dx != 0, let wm = windowManager else { return }
+        guard !expireHoldIfNeeded(), dx != 0, let wm = windowManager else { return }
         let now = DispatchTime.now()
         if !isPanning, now.uptimeNanoseconds - lastMotionTime.uptimeNanoseconds >= Self.idleTimeoutNs {
             accumulatedDX = 0
@@ -43,7 +66,7 @@ final class PanController {
         accumulatedDX += dx
         guard abs(accumulatedDX) >= Self.deadZone else { return }
 
-        let sID = wm.panningSpaceID ?? wm.currentActiveSpaceID()
+        let sID = panningSpaceID ?? wm.currentActiveSpaceID()
         if !isPanning, let columns = wm.ribbons[sID]?.columns {
             // Cancelling replays deferred AX events, which edit the ribbon, so it runs before the
             // ribbon is read.
@@ -53,19 +76,15 @@ final class PanController {
             }
             wm.scrollAnimator.cancel(windowIDs: spaceWindowIDs)
         }
-        guard var r = wm.ribbons[sID], !r.columns.isEmpty else { return }
-        let dID = wm.displayBySpaceID[sID] ?? wm.activeDisplayID ?? NSScreen.main?.displayID ?? 0
-        guard let screen = wm.screen(forDisplayID: dID) else { return }
-        let canvasWidth = Double(screen.visibleFrame.width) - (wm.config.edgeMargin * 2)
-        guard canvasWidth > 0 else { return }
+        guard var r = wm.ribbons[sID], !r.columns.isEmpty,
+              let canvasWidth = wm.canvasWidth(forSpace: sID) else { return }
 
-        let wasPanning = isPanning
-        if !wasPanning {
-            isPanning = true
+        if !isPanning {
+            panningSpaceID = sID
             flushCount = 0
-            wm.panningSpaceID = sID
             r.isOverview = false
             RibbonLog.log("pan started space=\(sID) offset=\(Int(r.viewportOffset))", category: "pan")
+            startFlushTimer()
         }
 
         let geometry = LayoutEngine.columnGeometry(for: r, canvasWidth: canvasWidth, config: wm.config)
@@ -74,75 +93,47 @@ final class PanController {
         r.viewportOffset = max(0, min(r.viewportOffset - dx, maxOffset))
         wm.ribbons[sID] = r
         needsFlush = true
-
-        if !wasPanning {
-            startFlushTimer()
-        }
     }
 
     func endPan(snap: Bool) {
         accumulatedDX = 0
         needsFlush = false
-        let flushes = flushCount
-        flushCount = 0
         stopFlushTimer()
-
-        guard isPanning, let wm = windowManager else {
-            isPanning = false
-            windowManager?.panningSpaceID = nil
-            return
-        }
-        isPanning = false
-        let sID = wm.panningSpaceID ?? wm.currentActiveSpaceID()
-        wm.panningSpaceID = nil
+        guard let sID = panningSpaceID else { return }
+        panningSpaceID = nil
+        guard let wm = windowManager else { return }
 
         guard snap, var r = wm.ribbons[sID], !r.columns.isEmpty else {
-            RibbonLog.log("pan ended: \(flushes) flushes", category: "pan")
+            RibbonLog.log("pan ended: \(flushCount) flushes", category: "pan")
             return
         }
-        let dID = wm.displayBySpaceID[sID] ?? wm.activeDisplayID ?? NSScreen.main?.displayID ?? 0
-        let canvasWidth = wm.screen(forDisplayID: dID).map {
-            Double($0.visibleFrame.width) - (wm.config.edgeMargin * 2)
-        } ?? 0
-
         var targetWindowID = r.activeWindow?.id
-        if canvasWidth > 0 {
+        if let canvasWidth = wm.canvasWidth(forSpace: sID) {
             let geometry = LayoutEngine.columnGeometry(for: r, canvasWidth: canvasWidth, config: wm.config)
             if let bestIndex = LayoutEngine.panSnapColumn(geometry: geometry, offset: r.viewportOffset,
                                                           canvasWidth: canvasWidth, activeIndex: r.activeColumnIndex),
                let winID = r.columns[bestIndex].activeWindow?.id {
-                _ = r.focus(windowID: winID)
+                r.focus(windowID: winID)
                 targetWindowID = winID
             }
             r.viewportOffset = LayoutEngine.panReleaseOffset(for: r, canvasWidth: canvasWidth, config: wm.config)
             wm.ribbons[sID] = r
         }
 
-        RibbonLog.log("pan ended: \(flushes) flushes focus wid=\(targetWindowID ?? 0)", category: "pan")
+        RibbonLog.log("pan ended: \(flushCount) flushes focus wid=\(targetWindowID ?? 0)", category: "pan")
         wm.retileNow(focusWindowID: targetWindowID, animated: true)
     }
 
-    func stop() {
-        isPanning = false
-        accumulatedDX = 0
-        needsFlush = false
-        flushCount = 0
-        stopFlushTimer()
-        windowManager?.panningSpaceID = nil
-    }
-
+    /// Ends an expired hold; true when no hold remains.
     private func expireHoldIfNeeded() -> Bool {
-        guard let wm = windowManager, wm.panHeld else { return true }
+        guard let heldSince else { return true }
         // A pan lasts until `pan end`, so pauses mid-pan leave the strip where the pointer put it.
-        let holdStart = isPanning ? lastMotionTime : wm.panHeldSince
-        if let holdStart, DispatchTime.now().uptimeNanoseconds - holdStart.uptimeNanoseconds < Self.holdTimeoutNs {
+        let holdStart = isPanning ? lastMotionTime : heldSince
+        guard DispatchTime.now().uptimeNanoseconds - holdStart.uptimeNanoseconds >= Self.holdTimeoutNs else {
             return false
         }
-        wm.panHeld = false
-        wm.panHeldSince = nil
-        wm.inputTap.setPointerMonitoring(false)
         RibbonLog.log("pan hold expired", category: "pan")
-        endPan(snap: true)
+        releaseHold()
         return true
     }
 
@@ -163,11 +154,7 @@ final class PanController {
     }
 
     private func tick() {
-        guard !expireHoldIfNeeded() else {
-            stopFlushTimer()
-            return
-        }
-        guard isPanning, let wm = windowManager else {
+        guard !expireHoldIfNeeded(), isPanning, let wm = windowManager else {
             stopFlushTimer()
             return
         }
