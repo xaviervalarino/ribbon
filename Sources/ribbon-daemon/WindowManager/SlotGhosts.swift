@@ -55,8 +55,8 @@ final class SlotGhosts {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         let block = NSView()
         block.wantsLayer = true
-        block.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.25).cgColor
-        block.layer?.borderColor = NSColor(white: 1, alpha: 0.2).cgColor
+        block.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.55).cgColor
+        block.layer?.borderColor = NSColor(white: 1, alpha: 0.45).cgColor
         block.layer?.borderWidth = 1
         block.layer?.cornerRadius = 10
         panel.contentView = block
