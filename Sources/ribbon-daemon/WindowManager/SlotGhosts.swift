@@ -1,0 +1,60 @@
+import AppKit
+
+/// Translucent blocks drawn where a window belongs while its app is too slow to show it there, so
+/// a slide never leaves an empty slot. The panels sit one level below normal windows, so they show
+/// only through gaps; window discovery admits layer 0 only, so they are never tiled.
+///
+/// Confined to the main queue.
+final class SlotGhosts {
+    private var panels: [CGWindowID: NSPanel] = [:]
+    private var spare: [NSPanel] = []
+
+    /// Shows or moves the ghost for `id` at `frame`, in Quartz coordinates (top-left origin).
+    func show(_ id: CGWindowID, frame: CGRect) {
+        let panel = panels[id] ?? spare.popLast() ?? Self.makePanel()
+        panels[id] = panel
+        panel.alphaValue = 1
+        panel.setFrame(Self.cocoaRect(frame), display: false)
+        if !panel.isVisible { panel.orderFrontRegardless() }
+    }
+
+    /// Fades every ghost out. A fading panel is reused only after its fade completes.
+    func hideAll() {
+        let fading = Array(panels.values)
+        guard !fading.isEmpty else { return }
+        panels.removeAll()
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.15
+            for panel in fading { panel.animator().alphaValue = 0 }
+        }, completionHandler: { [weak self] in
+            for panel in fading { panel.orderOut(nil) }
+            self?.spare.append(contentsOf: fading)
+        })
+    }
+
+    private static func cocoaRect(_ quartz: CGRect) -> CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return CGRect(x: quartz.minX, y: primaryHeight - quartz.maxY, width: quartz.width, height: quartz.height)
+    }
+
+    private static func makePanel() -> NSPanel {
+        let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: true)
+        panel.level = NSWindow.Level(rawValue: NSWindow.Level.normal.rawValue - 1)
+        panel.isOpaque = false
+        panel.backgroundColor = .clear
+        panel.hasShadow = false
+        panel.ignoresMouseEvents = true
+        panel.isReleasedWhenClosed = false
+        panel.hidesOnDeactivate = false
+        panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        let block = NSView()
+        block.wantsLayer = true
+        block.layer?.backgroundColor = NSColor(white: 0.5, alpha: 0.25).cgColor
+        block.layer?.borderColor = NSColor(white: 1, alpha: 0.2).cgColor
+        block.layer?.borderWidth = 1
+        block.layer?.cornerRadius = 10
+        panel.contentView = block
+        return panel
+    }
+}

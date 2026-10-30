@@ -124,7 +124,7 @@ extension WindowManager {
 
     /// Live-tunes slide settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
-        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing <value>" }
+        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing|ghost-lag-ms <value>" }
         let value = args[1].lowercased()
         switch args[0].lowercased() {
         case "resize-mode":
@@ -136,6 +136,9 @@ extension WindowManager {
         case "focus-timing":
             guard let timing = FocusTiming(rawValue: value) else { return "error: focus-timing start|end" }
             config.focusTiming = timing
+        case "ghost-lag-ms":
+            guard let ms = Int(value), ms >= 0 else { return "error: ghost-lag-ms <milliseconds, 0 disables>" }
+            config.ghostLagMs = ms
         default:
             return "error: unknown setting '\(args[0])'"
         }
@@ -168,7 +171,7 @@ extension WindowManager {
             case "inspect":
                 return debugInspect(appFilter: args.dropFirst().first)
             case "settings":
-                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
+                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue) ghost-lag-ms=\(config.ghostLagMs)"
             default:
                 break
             }
