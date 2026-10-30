@@ -216,8 +216,9 @@ final class ScrollAnimator: @unchecked Sendable {
             tracks.removeValue(forKey: id)
             landingWatches.removeValue(forKey: id)
         }
-        let cancelledGhosts = ghosted.intersection(windowIDs)
+        let cancelledGhosts = ghosted.union(seamGhosted).intersection(windowIDs)
         ghosted.subtract(cancelledGhosts)
+        seamGhosted.subtract(cancelledGhosts)
         ghosts.hide(Array(cancelledGhosts))
         if let focus = settledFocus, windowIDs.contains(focus.mutation.windowID) {
             settledFocus = nil
