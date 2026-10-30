@@ -372,9 +372,15 @@ final class ScrollAnimator: @unchecked Sendable {
     private func showGhosts(at nowMs: Double) {
         let p = progress(at: nowMs)
         for (id, track) in tracks {
-            let lagging = sentAtMs[track.pid].map { nowMs - $0 >= Self.ghostLagMs } ?? false
-            guard lagging || ghosted.contains(id) else { continue }
-            ghosted.insert(id)
+            let stepLagging = sentAtMs[track.pid].map { nowMs - $0 >= Self.ghostLagMs } ?? false
+            // A joining window WindowServer has not shown moved yet, which includes the app's redraw.
+            let unseen = landingWatches[id].map { watch in
+                watch.joining && (watch.sentMs.map { nowMs - $0 >= Self.ghostLagMs } ?? false)
+            } ?? false
+            guard stepLagging || unseen || ghosted.contains(id) else { continue }
+            if ghosted.insert(id).inserted {
+                RibbonLog.log("ghost wid=\(id) pid=\(track.pid) \(unseen ? "unseen" : "step lag")", category: "slide")
+            }
             let origin = Self.shown(track, progress: p, durationMs: durationMs)
             ghosts.show(id, frame: CGRect(origin: origin, size: track.final.frame.size))
         }
