@@ -22,7 +22,7 @@ import QuartzCore
 /// - Each app is sent the position it should show when its step lands (its measured step
 ///   round trip ahead), so a busy app lands in line with its neighbors instead of trailing them.
 /// - A window whose app sits on a step past `ghostLagMs` gets a ghost block in its slot until the
-///   slide ends, so a slow app never leaves the strip looking empty.
+///   app's final mutations are applied, so a slow app never leaves the strip looking empty.
 ///
 /// Confined to the main queue: the display link, `animate`, and step completions all run there.
 final class ScrollAnimator: @unchecked Sendable {
@@ -96,6 +96,8 @@ final class ScrollAnimator: @unchecked Sendable {
     var onSettledFocus: ((CGWindowID, pid_t) -> Void)?
     private let ghosts = SlotGhosts()
     private var ghosted: Set<CGWindowID> = []
+    /// Ghosts held at their window's final frame until the app's finals drain.
+    private var ghostsAwaitingFinals: [pid_t: [CGWindowID]] = [:]
 
     private var tracks: [CGWindowID: Track] = [:]
     private var startMs: Double = 0
@@ -398,8 +400,12 @@ final class ScrollAnimator: @unchecked Sendable {
             logLanding(id: id, watch, result: "none by slide end (\(Int(now - sentMs))ms) stepInFlight=\(inFlight)")
         }
         landingWatches.removeAll()
+        for id in ghosted {
+            guard let track = tracks[id] else { continue }
+            ghosts.show(id, frame: track.final.frame)
+            ghostsAwaitingFinals[track.pid, default: []].append(id)
+        }
         ghosted.removeAll()
-        ghosts.hideAll()
         var finalsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
         for track in tracks.values {
             finalsByPID[track.pid, default: []].append(track.final)
@@ -433,7 +439,12 @@ final class ScrollAnimator: @unchecked Sendable {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.finalsDraining[pid, default: 1] -= 1
-                if self.finalsDraining[pid] == 0 { self.finalsDraining.removeValue(forKey: pid) }
+                if self.finalsDraining[pid] == 0 {
+                    self.finalsDraining.removeValue(forKey: pid)
+                    // A window a newer slide ghosts again keeps its ghost.
+                    let held = self.ghostsAwaitingFinals.removeValue(forKey: pid) ?? []
+                    self.ghosts.hide(held.filter { !self.ghosted.contains($0) })
+                }
             }
         }
     }

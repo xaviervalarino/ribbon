@@ -18,11 +18,10 @@ final class SlotGhosts {
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
-    /// Fades every ghost out. A fading panel is reused only after its fade completes.
-    func hideAll() {
-        let fading = Array(panels.values)
+    /// Fades the ghosts of `ids` out. A fading panel is reused only after its fade completes.
+    func hide(_ ids: [CGWindowID]) {
+        let fading = ids.compactMap { panels.removeValue(forKey: $0) }
         guard !fading.isEmpty else { return }
-        panels.removeAll()
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
             for panel in fading { panel.animator().alphaValue = 0 }
