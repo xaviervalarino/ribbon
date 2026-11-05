@@ -20,6 +20,8 @@ final class SlotGhosts {
     /// Ghosts showing each window, across every `SlotGhosts`. A window's image is dropped
     /// `snapshotGrace` after its last ghost hides: a full-size capture runs to tens of MB.
     private static var users: [CGWindowID: Int] = [:]
+    /// Counts each window's last-ghost releases, so only the newest grace timer drops its image.
+    private static var releases: [CGWindowID: Int] = [:]
     private static let snapshotGrace: DispatchTimeInterval = .seconds(3)
     /// How far a block runs past an edge where its window continues, so the panel clips the
     /// block's corners and border there; above the block's 10pt corner radius.
@@ -31,7 +33,11 @@ final class SlotGhosts {
         let isNew = panels[id] == nil
         let panel = panels[id] ?? spare.popLast() ?? Self.makePanel()
         panels[id] = panel
-        if isNew { Self.users[id, default: 0] += 1 }
+        if isNew {
+            Self.users[id, default: 0] += 1
+            // A cached image shows at once; a fresh capture replaces it.
+            capture(id)
+        }
         panel.alphaValue = 1
         panel.setFrame(Self.cocoaRect(frame), display: false)
         let window = window ?? frame
@@ -53,8 +59,6 @@ final class SlotGhosts {
                                                height: shown.height / window.height)
         }
         if !panel.isVisible { panel.orderFrontRegardless() }
-        // A cached image shows at once; a fresh capture replaces it.
-        if isNew { capture(id) }
     }
 
     /// Shows exactly `frames`, fading out every other ghost; `windows` holds each window's whole frame.
@@ -77,7 +81,11 @@ final class SlotGhosts {
             for panel in fading { panel.animator().alphaValue = 0 }
         }, completionHandler: { [weak self] in
             guard let self else { return }
-            for panel in fading { panel.orderOut(nil) }
+            for panel in fading {
+                panel.orderOut(nil)
+                // A spare panel holding its image would keep it alive past the grace.
+                Self.block(of: panel)?.layer?.contents = nil
+            }
             spare.append(contentsOf: fading)
         })
     }
@@ -86,8 +94,12 @@ final class SlotGhosts {
         users[id, default: 1] -= 1
         guard users[id] == 0 else { return }
         users[id] = nil
+        let release = releases[id, default: 0] + 1
+        releases[id] = release
         DispatchQueue.main.asyncAfter(deadline: .now() + snapshotGrace) {
-            if users[id] == nil { snapshots[id] = nil }
+            guard users[id] == nil, releases[id] == release else { return }
+            snapshots[id] = nil
+            releases[id] = nil
         }
     }
 
