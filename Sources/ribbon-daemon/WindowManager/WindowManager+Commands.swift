@@ -344,7 +344,10 @@ extension WindowManager {
         )
 
         let newActive = ribbon.activeWindow?.id
-        retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: true)
+        // Entering or leaving overview resizes every window; a slide before those resizes only
+        // adds a second stage, so overview changes jump.
+        let overviewChanged = beforeRibbon.isOverview != ribbon.isOverview
+        retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: !overviewChanged)
 
         if openMissionControlAfterRetile {
             // A command that left overview before the slide settled cancels the launch.
