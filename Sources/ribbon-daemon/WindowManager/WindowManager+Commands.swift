@@ -235,12 +235,18 @@ extension WindowManager {
                 }
                 step = parsed
             }
-            let appliedDelta = ribbon.adjustWidth(by: action == "grow" ? step : -step)
+            let canvasW = canvasWidth(forSpace: sID)
+            // Laid-out width, which a learned minimum width can hold above the ratio.
+            let activeWidth = { (canvasW: Double) -> Double? in
+                let geometry = LayoutEngine.columnGeometry(for: self.ribbon, canvasWidth: canvasW, config: self.config)
+                return geometry.indices.contains(self.ribbon.activeColumnIndex) ? geometry[self.ribbon.activeColumnIndex].width : nil
+            }
+            let widthBefore = canvasW.flatMap(activeWidth)
+            ribbon.adjustWidth(by: action == "grow" ? step : -step)
             // The left variants keep the column's right edge in place by scrolling with the change;
             // a column against the canvas's left edge has no room to scroll and grows rightward.
-            if dir == "left", let canvasW = canvasWidth(forSpace: sID) {
-                // Column widths scale with the canvas plus one gap (see columnGeometry).
-                ribbon.viewportOffset = max(0.0, ribbon.viewportOffset + appliedDelta * (canvasW + config.windowGap))
+            if dir == "left", let canvasW, let widthBefore, let widthAfter = activeWidth(canvasW) {
+                ribbon.viewportOffset = max(0.0, ribbon.viewportOffset + widthAfter - widthBefore)
             }
         case "align":
             ribbon.isOverview = false

@@ -275,6 +275,8 @@ func runTests() {
     TestRunner.assertEqual(minWidthGeometry[1].width, 900.0, "Column keeps its window's minimum width")
     TestRunner.assertEqual(minWidthGeometry[2].x, minWidthGeometry[1].x + 900 + config.windowGap, "Next column starts after the minimum width")
     TestRunner.assertTrue(minWidthGeometry[0].width < 900, "Columns without a minimum keep their ratio width")
+    TestRunner.assertEqual(LayoutEngine.columnGeometry(for: minWidthRibbon, canvasWidth: 600, config: config)[1].width, 600.0,
+                           "A minimum wider than the canvas caps at the canvas")
     var raised = minWidthRibbon
     TestRunner.assertTrue(raised.raiseMinSize(width: 950, height: nil, forWindowID: 311), "A wider minimum raises it")
     TestRunner.assertFalse(raised.raiseMinSize(width: 800, height: nil, forWindowID: 311), "A narrower minimum is ignored")

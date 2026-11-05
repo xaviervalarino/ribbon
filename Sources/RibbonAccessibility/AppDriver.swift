@@ -200,8 +200,10 @@ public actor AppDriver {
                     )
                     // Apps hold windows at their minimum size; the layout makes room once it knows it.
                     // Terminals round widths to a character cell, so a width counts as a minimum
-                    // only past 16pt over the request.
-                    if let live = mutation.element.size {
+                    // only past 16pt over the request. setFrame ignores a failed size write, so an
+                    // unchanged size is no evidence of a minimum.
+                    if let live = mutation.element.size,
+                       currentKnownSize.map({ abs($0.width - live.width) >= 1 || abs($0.height - live.height) >= 1 }) ?? true {
                         let minWidth = live.width >= mutation.frame.width + 16 ? Double(live.width) : nil
                         let minHeight = live.height >= mutation.frame.height + 2 ? Double(live.height) : nil
                         if minWidth != nil || minHeight != nil { onMinSize?(winID, minWidth, minHeight) }
