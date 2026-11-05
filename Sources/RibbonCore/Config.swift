@@ -81,7 +81,9 @@ public struct Config: Sendable, Codable {
             "Raycast",
             "Karabiner-Elements",
             "Activity Monitor",
-            "borders"
+            "borders",
+            // A VM window sizes itself to the guest display, so tiling it rescales the guest.
+            "UTM"
         ],
         floatTitlePatterns: [String] = ["Extension: ("],
         stashCorner: StashCorner = .bottomRight,
