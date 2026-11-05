@@ -15,8 +15,7 @@ protocol InputTapDelegate: AnyObject {
 private let inputTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
     guard let userInfo else { return Unmanaged.passUnretained(event) }
     let tap = Unmanaged<InputTap>.fromOpaque(userInfo).takeUnretainedValue()
-    tap.handleEvent(type: type, event: event)
-    return Unmanaged.passUnretained(event)
+    return tap.handleEvent(type: type, event: event) ? Unmanaged.passUnretained(event) : nil
 }
 
 final class InputTap {
@@ -89,7 +88,9 @@ final class InputTap {
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            options: .listenOnly,
+            // A held pan swallows scrolls, which needs an active tap; outside a pan the tap only
+            // listens, so input never waits on the main run loop.
+            options: pointerMonitoring ? .defaultTap : .listenOnly,
             eventsOfInterest: mask,
             callback: inputTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -121,10 +122,11 @@ final class InputTap {
         }
     }
 
-    fileprivate func handleEvent(type: CGEventType, event: CGEvent) {
+    /// Returns false to drop the event before it reaches apps.
+    fileprivate func handleEvent(type: CGEventType, event: CGEvent) -> Bool {
         switch type {
         case .tapDisabledByTimeout, .tapDisabledByUserInput:
-            guard let port = tapPort else { return }
+            guard let port = tapPort else { return true }
             CGEvent.tapEnable(tap: port, enable: true)
             RibbonLog.log("input tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")", category: "input")
             // Events are dropped while the tap is disabled; a released button means the mouse-up was one of them.
@@ -140,6 +142,8 @@ final class InputTap {
             delegate?.pointerMoved(dx: event.getDoubleValueField(.mouseEventDeltaX))
         case .scrollWheel:
             delegate?.pointerMoved(dx: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2))
+            // A scroll that pans the strip must not also scroll or swipe-navigate the app under the cursor.
+            return !pointerMonitoring
         case gestureEventType:
             delegate?.gesture(event)
         case swipeEventType:
@@ -147,5 +151,6 @@ final class InputTap {
         default:
             break
         }
+        return true
     }
 }
