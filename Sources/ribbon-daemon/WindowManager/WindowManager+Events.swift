@@ -139,6 +139,8 @@ extension WindowManager: AXEventObserverDelegate {
         let canvasW = screen.visibleFrame.width - (config.edgeMargin * 2)
         guard canvasW > 0 else { return }
 
+        // A resize with the mouse held is the user's; any other is an app adjusting itself.
+        let byHand = CGEventSource.buttonState(.combinedSessionState, button: .left)
         resizeDebounceWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -146,7 +148,8 @@ extension WindowManager: AXEventObserverDelegate {
             guard let newSize = self.serverFrame(id)?.size else { return }
             // Apps settle a few points off the width they are given (terminals round to a cell,
             // UTM to its display); adopting that as a manual resize starts a resize loop.
-            if let last = self.lastAppliedFrames[id], abs(last.size.width - newSize.width) < 16 {
+            let slack: CGFloat = byHand ? 2 : 16
+            if let last = self.lastAppliedFrames[id], abs(last.size.width - newSize.width) < slack {
                 return
             }
             // The inverse of columnGeometry's width: ratio × (canvas + gap) − gap.

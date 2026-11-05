@@ -14,8 +14,6 @@ final class SlotGhosts {
     private var panels: [CGWindowID: NSPanel] = [:]
     private var spare: [NSPanel] = []
     private var capturing: Set<CGWindowID> = []
-    /// Ghosts kept invisible until their first capture lands or fails.
-    private var awaitingImage: Set<CGWindowID> = []
 
     /// Window images shared by every `SlotGhosts`, so a window handed between the slide ghosts and
     /// the seam ghosts keeps its image instead of showing the plain fill while it is captured again.
@@ -30,6 +28,8 @@ final class SlotGhosts {
     private static var shrunk: Set<CGWindowID> = []
     /// Windows waiting for `warm`'s next batch.
     private static var toWarm: Set<CGWindowID> = []
+    /// Windows `forget` dropped, so a capture still in flight for one stores nothing.
+    private static var gone: Set<CGWindowID> = []
     private static let snapshotGrace: DispatchTimeInterval = .seconds(3)
     /// How far a block runs past an edge where its window continues, so the panel clips the
     /// block's corners and border there; above the block's 10pt corner radius.
@@ -43,11 +43,11 @@ final class SlotGhosts {
         panels[id] = panel
         if isNew {
             Self.users[id, default: 0] += 1
-            if Self.snapshots[id] == nil { awaitingImage.insert(id) }
-            // A cached image shows at once; a fresh capture replaces it.
+            // A cached image shows at once and a fresh capture replaces it; without one the ghost
+            // stays invisible until its capture lands or fails.
+            panel.alphaValue = Self.snapshots[id] == nil ? 0 : 1
             capture(id)
         }
-        panel.alphaValue = awaitingImage.contains(id) ? 0 : 1
         panel.setFrame(Self.cocoaRect(frame), display: false)
         let window = window ?? frame
         if let block = Self.block(of: panel), window.width > 0, window.height > 0 {
@@ -81,7 +81,6 @@ final class SlotGhosts {
         var fading: [NSPanel] = []
         for id in ids {
             guard let panel = panels.removeValue(forKey: id) else { continue }
-            awaitingImage.remove(id)
             Self.release(id)
             fading.append(panel)
         }
@@ -113,8 +112,8 @@ final class SlotGhosts {
             DispatchQueue.global(qos: .utility).async {
                 let small = quarterSize(image)
                 DispatchQueue.main.async {
-                    // A capture that landed meanwhile is newer.
-                    guard snapshots[id] === image else { return }
+                    // A ghost shown meanwhile, or a capture landed meanwhile, keeps the full image.
+                    guard users[id] == nil, snapshots[id] === image else { return }
                     snapshots[id] = small
                     shrunk.insert(id)
                 }
@@ -125,6 +124,7 @@ final class SlotGhosts {
     /// Captures `id` at quarter size within a second, unless it already has an image, so its first
     /// ghost never starts empty. Calls inside that second share one capture batch.
     static func warm(_ id: CGWindowID) {
+        gone.remove(id)
         let isFirst = toWarm.isEmpty
         toWarm.insert(id)
         guard isFirst else { return }
@@ -143,7 +143,7 @@ final class SlotGhosts {
                         guard let image else { return }
                         DispatchQueue.main.async {
                             // A ghost's own capture is sharper.
-                            guard snapshots[window.windowID] == nil else { return }
+                            guard snapshots[window.windowID] == nil, !gone.contains(window.windowID) else { return }
                             snapshots[window.windowID] = image
                             shrunk.insert(window.windowID)
                         }
@@ -156,8 +156,8 @@ final class SlotGhosts {
     /// Drops `id`'s image; call once its window is gone.
     static func forget(_ id: CGWindowID) {
         snapshots[id] = nil
-        releases[id] = nil
         shrunk.remove(id)
+        gone.insert(id)
     }
 
     private static func quarterSize(_ image: CGImage) -> CGImage? {
@@ -207,14 +207,15 @@ final class SlotGhosts {
             let ms = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
             RibbonLog.log("ghost capture wid=\(id) \(image == nil ? "failed \(error.map { "\($0)" } ?? "no window")" : "ok") \(ms)ms",
                           category: "slide")
-            if let image, Self.users[id] != nil {
+            if let image, Self.users[id] != nil, !Self.gone.contains(id) {
                 Self.snapshots[id] = image
                 Self.shrunk.remove(id)
             }
             guard let panel = self.panels[id] else { return }
             if let image { Self.block(of: panel)?.layer?.contents = image }
-            // The first capture fades its image in; a failed one (no Screen Recording grant), the plain fill.
-            if self.awaitingImage.remove(id) != nil {
+            // A ghost waiting on its first image fades it in; on a failed capture (no Screen
+            // Recording grant), it fades in the plain fill.
+            if panel.alphaValue == 0 {
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.12
                     panel.animator().alphaValue = 1
