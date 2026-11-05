@@ -138,6 +138,8 @@ public final class WindowManager {
     var appDrivers: [pid_t: AppDriver] = [:]
     /// Ghosts the slots of columns parked past a shared display edge.
     let seamGhosts = SlotGhosts()
+    /// The `overview` grid of window captures; its selection is independent of the real ribbon.
+    let screenshotGrid = ScreenshotGrid()
     lazy var scrollAnimator = ScrollAnimator { [unowned self] pid in self.appDriver(for: pid) }
 
     func appDriver(for pid: pid_t) -> AppDriver {
@@ -207,6 +209,9 @@ public final class WindowManager {
 
     public init() {
         observer.delegate = self
+        screenshotGrid.onClick = { [weak self] id in
+            self?.closeScreenshotGrid(focusSelection: id != nil, windowID: id)
+        }
         // Reads live config on every check, so later config changes apply.
         observer.shouldObserve = { [weak self] app in
             guard let self, let name = app.localizedName else { return true }
@@ -437,6 +442,7 @@ public final class WindowManager {
     }
 
     func displayConfigurationBegan() {
+        screenshotGrid.close()
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
@@ -445,6 +451,7 @@ public final class WindowManager {
     }
 
     func displayConfigurationChanged() {
+        screenshotGrid.close()
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil

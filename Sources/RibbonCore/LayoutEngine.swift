@@ -110,6 +110,17 @@ public struct LayoutEngine: Sendable {
         return floor(max(0.0, min(targetOffset, maxOffset)))
     }
 
+    /// The largest rectangle with `size`'s aspect ratio centered in `cell` inset by `margin`; a
+    /// size without area takes the whole inset cell.
+    public static func aspectFit(_ size: CGSize, in cell: CGRect, margin: Double) -> CGRect {
+        let inner = cell.insetBy(dx: margin, dy: margin)
+        guard size.width > 0, size.height > 0, inner.width > 0, inner.height > 0 else { return inner }
+        let scale = min(inner.width / size.width, inner.height / size.height)
+        let fitted = CGSize(width: size.width * scale, height: size.height * scale)
+        return CGRect(x: inner.midX - fitted.width / 2, y: inner.midY - fitted.height / 2,
+                      width: fitted.width, height: fitted.height)
+    }
+
     public static func overviewGrid(
         columnCount: Int,
         canvasWidth: Double,

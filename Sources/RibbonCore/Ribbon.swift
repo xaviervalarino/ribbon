@@ -75,6 +75,21 @@ public struct Ribbon: Sendable, Codable {
         activeColumnIndex = min(columns.count - 1, activeColumnIndex + perRow)
     }
 
+    /// Moves focus as the `focus` command does: up and down move grid rows in the overview and
+    /// rows of the active column otherwise. Returns false for an unknown direction.
+    public mutating func focus(direction: String, perRow: Int) -> Bool {
+        switch direction {
+        case "left", "h": focusLeft()
+        case "right", "l": focusRight()
+        case "up", "k": isOverview ? focusRowUp(perRow: perRow) : focusUp()
+        case "down", "j": isOverview ? focusRowDown(perRow: perRow) : focusDown()
+        case "first": focusFirst()
+        case "last": focusLast()
+        default: return false
+        }
+        return true
+    }
+
     // MARK: - Reordering & Manipulation
 
     public mutating func swapLeft() {

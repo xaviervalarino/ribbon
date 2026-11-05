@@ -151,19 +151,37 @@ extension WindowManager {
         return "ok"
     }
 
+    /// The screen showing `sID`: its recorded display, else the active one, else the main screen.
+    private func screen(forSpace sID: SpaceID) -> NSScreen? {
+        screen(forDisplayID: displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0)
+    }
+
     /// Canvas width of the display showing `sID`, as `windowResized` measures it.
     func canvasWidth(forSpace sID: SpaceID) -> Double? {
-        let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
-        guard let screen = screen(forDisplayID: dID) ?? NSScreen.main else { return nil }
+        guard let screen = screen(forSpace: sID) ?? NSScreen.main else { return nil }
         let width = screen.visibleFrame.width - (config.edgeMargin * 2)
         return width > 0 ? width : nil
     }
 
-    private func launchMissionControl() {
-        NSWorkspace.shared.openApplication(
-            at: URL(fileURLWithPath: "/System/Applications/Mission Control.app"),
-            configuration: NSWorkspace.OpenConfiguration()
-        )
+    /// Opens the screenshot grid for space `sID` on its display. Cells come from the overview
+    /// layout of a copy of the ribbon, so the real ribbon never enters overview.
+    private func openScreenshotGrid(forSpace sID: SpaceID) {
+        guard var copy = ribbons[sID], !copy.columns.isEmpty, let screen = screen(forSpace: sID) else { return }
+        let primaryHeight = Double(NSScreen.screens.first?.frame.height ?? 0)
+        let visible = QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryHeight)
+        let display = QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryHeight)
+        copy.isOverview = true
+        let plan = LayoutEngine.computePlan(for: copy, screenFrame: visible, config: config)
+        let frames = serverFrames()
+        let thumbnails = plan.placements.map { placement in
+            ScreenshotGrid.Thumbnail(
+                id: placement.windowID,
+                windowFrame: frames[placement.windowID] ?? lastAppliedFrames[placement.windowID] ?? placement.frame,
+                cell: placement.frame
+            )
+        }
+        screenshotGrid.open(selection: copy, spaceID: sID, thumbnails: thumbnails,
+                            screen: screen, displayFrame: display.cgRect)
     }
 
     public func handleCommand(_ command: String) -> String {
@@ -191,7 +209,6 @@ extension WindowManager {
         // Commands act on the ribbon's own active column: macOS focus lags while the previous
         // command's activation is in flight. Clicks reach the ribbon as focus events.
         let sID = currentActiveSpaceID()
-        var openMissionControlAfterRetile = false
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
@@ -210,28 +227,39 @@ extension WindowManager {
             category: "cmd"
         )
 
+        // While the grid is open, `focus` moves its selection and `overview` closes it onto the
+        // selected window; every other command closes it first and runs as usual.
+        if screenshotGrid.isOpen {
+            switch action {
+            case "focus":
+                let dir = parts.dropFirst().first?.lowercased() ?? "right"
+                return screenshotGrid.moveSelection(dir, perRow: config.overviewColumnsPerRow)
+                    ? "ok" : "error: unknown focus direction"
+            case "toggle-overview", "overview":
+                if parts.count == 1 {
+                    closeScreenshotGrid(focusSelection: true)
+                    return "ok"
+                }
+                screenshotGrid.close()
+            case "status":
+                break
+            case "pan":
+                // Caps+W sends `pan begin` before every grid key, so a hold must not close the
+                // grid or pan the strip behind it; `pan end` still runs so the hold always ends.
+                if parts.dropFirst().first?.lowercased() == "begin" { return "ok" }
+            default:
+                screenshotGrid.close()
+            }
+        }
+
         switch action {
         case "focus":
             let dir = parts.dropFirst().first?.lowercased() ?? "right"
-            switch dir {
-            case "left", "h": ribbon.focusLeft()
-            case "right", "l": ribbon.focusRight()
-            case "up", "k":
-                if ribbon.isOverview {
-                    ribbon.focusRowUp(perRow: config.overviewColumnsPerRow)
-                } else {
-                    ribbon.focusUp()
-                }
-            case "down", "j":
-                if ribbon.isOverview {
-                    ribbon.focusRowDown(perRow: config.overviewColumnsPerRow)
-                } else {
-                    ribbon.focusDown()
-                }
-            case "first": ribbon.focusFirst()
-            case "last": ribbon.focusLast()
-            default: return "error: unknown focus direction"
+            var r = ribbon
+            guard r.focus(direction: dir, perRow: config.overviewColumnsPerRow) else {
+                return "error: unknown focus direction"
             }
+            ribbon = r
         case "swap", "move":
             ribbon.isOverview = false
             let dir = parts.dropFirst().first?.lowercased() ?? "right"
@@ -287,15 +315,20 @@ extension WindowManager {
             ribbon.isOverview = false
             ribbon.barf()
         case "toggle-overview", "overview":
-            if parts.dropFirst().first?.lowercased() == "mission-control" {
-                ribbon.isOverview = true
-                openMissionControlAfterRetile = true
-            } else {
+            switch parts.dropFirst().first?.lowercased() {
+            case "resize":
                 ribbon.toggleOverview()
+            case nil:
+                // Plain `overview` leaves the resize overview when it is up, so one key exits both.
+                if ribbon.isOverview {
+                    ribbon.isOverview = false
+                } else {
+                    openScreenshotGrid(forSpace: sID)
+                    return "ok"
+                }
+            default:
+                return "error: unknown overview mode"
             }
-        case "mission-control":
-            launchMissionControl()
-            return "ok"
         case "pan":
             // A key binding sends `pan begin` on press and `pan end` on release; between them
             // pointer motion pans the strip instead of moving the cursor.
@@ -353,7 +386,7 @@ extension WindowManager {
             let dCount = NSScreen.screens.count
             let actD = activeDisplayID ?? NSScreen.main?.displayID ?? 0
             let actS = currentActiveSpaceID()
-            return "screens: \(dCount), display: \(actD), space: \(actS), columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview)"
+            return "screens: \(dCount), display: \(actD), space: \(actS), columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview), grid: \(screenshotGrid.isOpen)"
         case "restart":
             DispatchQueue.main.async { [weak self] in
                 self?.restart()
@@ -381,19 +414,20 @@ extension WindowManager {
         let overviewChanged = beforeRibbon.isOverview != ribbon.isOverview
         retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: !overviewChanged)
 
-        if openMissionControlAfterRetile {
-            // A command that left overview before the slide settled cancels the launch.
-            let launch = { [weak self] in
-                guard let self, self.ribbons[sID]?.isOverview == true else { return }
-                self.launchMissionControl()
-            }
-            if scrollAnimator.isActive {
-                scrollAnimator.onNextIdle = launch
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50), execute: launch)
-            }
-        }
-
         return "ok"
+    }
+
+    /// Closes the grid. With `focusSelection`, `windowID` (the grid's selection when nil) becomes
+    /// the active window of the ribbon the grid opened for and is focused through the retile path,
+    /// as a `focus` command focuses. The grid closes before the focus, so the focus events it
+    /// causes find the grid closed.
+    func closeScreenshotGrid(focusSelection: Bool, windowID: CGWindowID? = nil) {
+        let selected = windowID ?? screenshotGrid.selectedWindowID
+        let spaceID = screenshotGrid.spaceID
+        screenshotGrid.close()
+        guard focusSelection, let id = selected, let sID = spaceID,
+              var r = ribbons[sID], r.focus(windowID: id) else { return }
+        ribbons[sID] = r
+        retileNow(focusWindowID: id, animated: true)
     }
 }

@@ -433,6 +433,15 @@ func runTests() {
     navRibbon.focusRowUp(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
 
+    // 14b. aspectFit centers the thumbnail inside the cell margin
+    let fitCell = CGRect(x: 100, y: 50, width: 400, height: 400)
+    TestRunner.assertEqual(LayoutEngine.aspectFit(CGSize(width: 800, height: 400), in: fitCell, margin: 20),
+                           CGRect(x: 120, y: 160, width: 360, height: 180), "Wide window fills the inset width, centered vertically")
+    TestRunner.assertEqual(LayoutEngine.aspectFit(CGSize(width: 400, height: 800), in: fitCell, margin: 20),
+                           CGRect(x: 210, y: 70, width: 180, height: 360), "Tall window fills the inset height, centered horizontally")
+    TestRunner.assertEqual(LayoutEngine.aspectFit(.zero, in: fitCell, margin: 20),
+                           CGRect(x: 120, y: 70, width: 360, height: 360), "A size without area takes the inset cell")
+
     // 15. adjustWidth grow, clamp, and explicit width clearing (C.1)
     var c1Ribbon = Ribbon(columns: [
         ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "A", appName: "App1")], widthRatio: 0.5),
@@ -568,6 +577,38 @@ func runTests() {
                            "The first column at the strip's start stays put")
     TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 400), canvasWidth: 1500, config: Config(panCenterSnap: 0)), 400,
                            "A zero threshold never centers")
+
+    // 21. focus(direction:perRow:) shared by the focus command and the screenshot grid
+    var dirRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 801, pid: 1, title: "0", appName: "App1")]),
+        ColumnModel(windows: [
+            WindowModel(id: 802, pid: 2, title: "1a", appName: "App2"),
+            WindowModel(id: 803, pid: 2, title: "1b", appName: "App2")
+        ]),
+        ColumnModel(windows: [WindowModel(id: 804, pid: 3, title: "2", appName: "App3")]),
+        ColumnModel(windows: [WindowModel(id: 805, pid: 4, title: "3", appName: "App4")]),
+        ColumnModel(windows: [WindowModel(id: 806, pid: 5, title: "4", appName: "App5")])
+    ], activeColumnIndex: 1)
+    TestRunner.assertTrue(dirRibbon.focus(direction: "j", perRow: 3), "j is a known direction")
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "down outside the overview stays in the column")
+    TestRunner.assertEqual(dirRibbon.activeWindow?.id, 803, "down outside the overview moves down the stack")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "up", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeWindow?.id, 802, "up outside the overview moves up the stack")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "l", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 2, "l moves right")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "left", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "left moves left")
+    dirRibbon.isOverview = true
+    TestRunner.assertTrue(dirRibbon.focus(direction: "down", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 4, "down in the overview moves one grid row")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "k", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "k in the overview moves one grid row up")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "last", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 4, "last moves to the last column")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "first", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "first moves to the first column")
+    TestRunner.assertFalse(dirRibbon.focus(direction: "sideways", perRow: 3), "unknown direction returns false")
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "unknown direction leaves focus alone")
 
     guard TestRunner.summary() else {
         exit(1)
