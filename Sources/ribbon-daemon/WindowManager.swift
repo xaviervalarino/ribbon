@@ -120,6 +120,8 @@ public final class WindowManager {
     var appDrivers: [pid_t: AppDriver] = [:]
     /// Ghosts the slots of columns parked past a shared display edge.
     let seamGhosts = SlotGhosts()
+    /// The `overview` grid of window captures; its selection is independent of the real ribbon.
+    let screenshotGrid = ScreenshotGrid()
     lazy var scrollAnimator = ScrollAnimator { [unowned self] pid in self.appDriver(for: pid) }
 
     func appDriver(for pid: pid_t) -> AppDriver {

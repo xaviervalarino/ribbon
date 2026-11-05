@@ -433,6 +433,15 @@ func runTests() {
     navRibbon.focusRowUp(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
 
+    // 14b. aspectFit centers the thumbnail inside the cell margin
+    let fitCell = CGRect(x: 100, y: 50, width: 400, height: 400)
+    TestRunner.assertEqual(LayoutEngine.aspectFit(CGSize(width: 800, height: 400), in: fitCell, margin: 20),
+                           CGRect(x: 120, y: 160, width: 360, height: 180), "Wide window fills the inset width, centered vertically")
+    TestRunner.assertEqual(LayoutEngine.aspectFit(CGSize(width: 400, height: 800), in: fitCell, margin: 20),
+                           CGRect(x: 210, y: 70, width: 180, height: 360), "Tall window fills the inset height, centered horizontally")
+    TestRunner.assertEqual(LayoutEngine.aspectFit(.zero, in: fitCell, margin: 20),
+                           CGRect(x: 120, y: 70, width: 360, height: 360), "A size without area takes the inset cell")
+
     // 15. adjustWidth grow, clamp, and explicit width clearing (C.1)
     var c1Ribbon = Ribbon(columns: [
         ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "A", appName: "App1")], widthRatio: 0.5),

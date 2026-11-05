@@ -92,8 +92,6 @@ final class ScrollAnimator: @unchecked Sendable {
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
     var onIdle: (() -> Void)?
-    /// Runs once, after `onIdle`, when the current slide finishes; a later assignment replaces it.
-    var onNextIdle: (() -> Void)?
     /// Runs when a held focus is sent, so its echoes are judged from then.
     var onSettledFocus: ((CGWindowID, pid_t) -> Void)?
     private let ghosts = SlotGhosts()
@@ -445,9 +443,6 @@ final class ScrollAnimator: @unchecked Sendable {
             }
         }
         onIdle?()
-        let next = onNextIdle
-        onNextIdle = nil
-        next?()
     }
 
     /// Marks the app busy until its driver drains, so a slide starting meanwhile does not wait on it.

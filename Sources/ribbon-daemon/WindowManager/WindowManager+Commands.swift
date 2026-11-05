@@ -150,11 +150,24 @@ extension WindowManager {
         return width > 0 ? width : nil
     }
 
-    private func launchMissionControl() {
-        NSWorkspace.shared.openApplication(
-            at: URL(fileURLWithPath: "/System/Applications/Mission Control.app"),
-            configuration: NSWorkspace.OpenConfiguration()
-        )
+    /// Opens the screenshot grid for space `sID` on its display. Cells come from the overview
+    /// layout of a copy of the ribbon, so the real ribbon never enters overview.
+    private func openScreenshotGrid(forSpace sID: SpaceID) {
+        guard var copy = ribbons[sID], !copy.columns.isEmpty else { return }
+        let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
+        guard let screen = screen(forDisplayID: dID) ?? NSScreen.main else { return }
+        let primaryHeight = Double(NSScreen.screens.first?.frame.height ?? 0)
+        let visible = QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryHeight)
+        copy.isOverview = true
+        let plan = LayoutEngine.computePlan(for: copy, screenFrame: visible, config: config)
+        let thumbnails = plan.placements.map { placement in
+            ScreenshotGrid.Thumbnail(
+                id: placement.windowID,
+                windowFrame: serverFrame(placement.windowID) ?? lastAppliedFrames[placement.windowID] ?? placement.frame,
+                cell: placement.frame
+            )
+        }
+        screenshotGrid.open(selection: copy, thumbnails: thumbnails, screen: screen)
     }
 
     public func handleCommand(_ command: String) -> String {
@@ -177,7 +190,6 @@ extension WindowManager {
         // Commands act on the ribbon's own active column: macOS focus lags while the previous
         // command's activation is in flight. Clicks reach the ribbon as focus events.
         let sID = currentActiveSpaceID()
-        var openMissionControlAfterRetile = false
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
@@ -188,6 +200,27 @@ extension WindowManager {
             "CMD '\(command)' on space=\(sID) display=\(displayBySpaceID[sID] ?? 0) cols=\(beforeRibbon.columns.count) activeCol=\(beforeRibbon.activeColumnIndex) activeWin=\(previousActive ?? 0)",
             category: "cmd"
         )
+
+        // While the grid is open, `focus` moves its selection and `overview` closes it onto the
+        // selected window; every other command closes it first and runs as usual.
+        if screenshotGrid.isOpen {
+            switch action {
+            case "focus":
+                let dir = parts.dropFirst().first?.lowercased() ?? "right"
+                return screenshotGrid.moveSelection(dir, perRow: config.overviewColumnsPerRow)
+                    ? "ok" : "error: unknown focus direction"
+            case "toggle-overview", "overview":
+                if parts.count == 1 {
+                    closeScreenshotGrid(focusSelection: true)
+                    return "ok"
+                }
+                screenshotGrid.close()
+            case "status":
+                break
+            default:
+                screenshotGrid.close()
+            }
+        }
 
         switch action {
         case "focus":
@@ -266,15 +299,20 @@ extension WindowManager {
             ribbon.isOverview = false
             ribbon.barf()
         case "toggle-overview", "overview":
-            if parts.dropFirst().first?.lowercased() == "mission-control" {
-                ribbon.isOverview = true
-                openMissionControlAfterRetile = true
-            } else {
+            switch parts.dropFirst().first?.lowercased() {
+            case "resize":
                 ribbon.toggleOverview()
+            case nil:
+                // Plain `overview` leaves the resize overview when it is up, so one key exits both.
+                if ribbon.isOverview {
+                    ribbon.isOverview = false
+                } else {
+                    openScreenshotGrid(forSpace: sID)
+                    return "ok"
+                }
+            default:
+                return "error: unknown overview mode"
             }
-        case "mission-control":
-            launchMissionControl()
-            return "ok"
         case "focus-display":
             let screens = NSScreen.screens
             guard screens.count > 1 else { return "ok" }
@@ -321,7 +359,7 @@ extension WindowManager {
             let dCount = NSScreen.screens.count
             let actD = activeDisplayID ?? NSScreen.main?.displayID ?? 0
             let actS = currentActiveSpaceID()
-            return "screens: \(dCount), display: \(actD), space: \(actS), columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview)"
+            return "screens: \(dCount), display: \(actD), space: \(actS), columns: \(ribbon.columns.count), active: \(ribbon.activeColumnIndex), overview: \(ribbon.isOverview), grid: \(screenshotGrid.isOpen)"
         case "restart":
             DispatchQueue.main.async { [weak self] in
                 self?.restart()
@@ -346,19 +384,18 @@ extension WindowManager {
         let newActive = ribbon.activeWindow?.id
         retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: true)
 
-        if openMissionControlAfterRetile {
-            // A command that left overview before the slide settled cancels the launch.
-            let launch = { [weak self] in
-                guard let self, self.ribbons[sID]?.isOverview == true else { return }
-                self.launchMissionControl()
-            }
-            if scrollAnimator.isActive {
-                scrollAnimator.onNextIdle = launch
-            } else {
-                DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(50), execute: launch)
-            }
-        }
-
         return "ok"
+    }
+
+    /// Closes the grid; with `focusSelection` the selected window becomes the ribbon's active
+    /// window and is focused through the retile path, as a `focus` command focuses.
+    func closeScreenshotGrid(focusSelection: Bool) {
+        let selected = screenshotGrid.selectedWindowID
+        screenshotGrid.close()
+        guard focusSelection, let id = selected else { return }
+        let sID = currentActiveSpaceID()
+        guard var r = ribbons[sID], r.focus(windowID: id) else { return }
+        ribbons[sID] = r
+        retileNow(focusWindowID: id, animated: true)
     }
 }
