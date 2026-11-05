@@ -27,6 +27,7 @@ guard !arguments.isEmpty else {
       ribbon restart
       ribbon quit (alias: stop)
       ribbon status
+      ribbon debug capture-probe
     """)
     exit(0)
 }
