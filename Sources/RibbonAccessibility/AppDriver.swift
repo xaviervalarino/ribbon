@@ -211,8 +211,8 @@ public actor AppDriver {
                     // unchanged size is no evidence of a minimum.
                     if let live = mutation.element.size,
                        currentKnownSize.map({ abs($0.width - live.width) >= 1 || abs($0.height - live.height) >= 1 }) ?? true {
-                        let minWidth = live.width >= mutation.frame.width + 16 ? Double(live.width) : nil
-                        let minHeight = live.height >= mutation.frame.height + 2 ? Double(live.height) : nil
+                        let minWidth: Double? = live.width >= mutation.frame.width + 16 ? live.width : nil
+                        let minHeight: Double? = live.height >= mutation.frame.height + 2 ? live.height : nil
                         if minWidth != nil || minHeight != nil { onMinSize?(winID, minWidth, minHeight) }
                     }
                 }
