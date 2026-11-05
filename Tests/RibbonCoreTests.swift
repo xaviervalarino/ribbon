@@ -523,6 +523,38 @@ func runTests() {
     c3Ribbon.focusLast()
     TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 3, "focusLast moves activeColumnIndex to 3")
 
+    // 18. focus(direction:perRow:) shared by the focus command and the screenshot grid
+    var dirRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 801, pid: 1, title: "0", appName: "App1")]),
+        ColumnModel(windows: [
+            WindowModel(id: 802, pid: 2, title: "1a", appName: "App2"),
+            WindowModel(id: 803, pid: 2, title: "1b", appName: "App2")
+        ]),
+        ColumnModel(windows: [WindowModel(id: 804, pid: 3, title: "2", appName: "App3")]),
+        ColumnModel(windows: [WindowModel(id: 805, pid: 4, title: "3", appName: "App4")]),
+        ColumnModel(windows: [WindowModel(id: 806, pid: 5, title: "4", appName: "App5")])
+    ], activeColumnIndex: 1)
+    TestRunner.assertTrue(dirRibbon.focus(direction: "j", perRow: 3), "j is a known direction")
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "down outside the overview stays in the column")
+    TestRunner.assertEqual(dirRibbon.activeWindow?.id, 803, "down outside the overview moves down the stack")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "up", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeWindow?.id, 802, "up outside the overview moves up the stack")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "l", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 2, "l moves right")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "left", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "left moves left")
+    dirRibbon.isOverview = true
+    TestRunner.assertTrue(dirRibbon.focus(direction: "down", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 4, "down in the overview moves one grid row")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "k", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "k in the overview moves one grid row up")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "last", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 4, "last moves to the last column")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "first", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "first moves to the first column")
+    TestRunner.assertFalse(dirRibbon.focus(direction: "sideways", perRow: 3), "unknown direction returns false")
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "unknown direction leaves focus alone")
+
     guard TestRunner.summary() else {
         exit(1)
     }
