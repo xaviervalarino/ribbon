@@ -107,12 +107,14 @@ final class PanController {
             RibbonLog.log("pan ended: \(flushCount) flushes", category: "pan")
             return
         }
-        var targetWindowID = r.activeWindow?.id
+        // Focus moves only when the snap lands on another column, so a pan that settles back on the
+        // active column leaves focus in a floating window or another app.
+        var targetWindowID: CGWindowID?
         if let canvasWidth = wm.canvasWidth(forSpace: sID) {
             let geometry = LayoutEngine.columnGeometry(for: r, canvasWidth: canvasWidth, config: wm.config)
             if let bestIndex = LayoutEngine.panSnapColumn(geometry: geometry, offset: r.viewportOffset,
                                                           canvasWidth: canvasWidth, activeIndex: r.activeColumnIndex),
-               let winID = r.columns[bestIndex].activeWindow?.id {
+               let winID = r.columns[bestIndex].activeWindow?.id, winID != r.activeWindow?.id {
                 r.focus(windowID: winID)
                 targetWindowID = winID
             }

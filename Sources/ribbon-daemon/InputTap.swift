@@ -130,7 +130,8 @@ final class InputTap {
             CGEvent.tapEnable(tap: port, enable: true)
             RibbonLog.log("input tap re-enabled after \(type == .tapDisabledByTimeout ? "timeout" : "user input")", category: "input")
             // Events are dropped while the tap is disabled; a released button means the mouse-up was one of them.
-            if !CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            // Not during a held pan: a mouse-up ends the pan, and a main-thread stall is no click.
+            if !pointerMonitoring && !CGEventSource.buttonState(.combinedSessionState, button: .left) {
                 delegate?.mouseUp()
             }
         case .leftMouseUp:
