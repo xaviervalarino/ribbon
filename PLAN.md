@@ -213,6 +213,12 @@ Job specs with exact files, text and verification live in `.claude/plans/milesto
 - [ ] C.1 `grow|shrink left|right [step]` (left variants keep the right edge fixed via the viewport offset). C.2 `align left|center|right`. C.3 `focus first|last`, `move first|last`. C.4 `mission-control`, `overview mission-control`.
 - [ ] D. Overview as a flex-row grid (`overviewColumnsPerRow`, `focusRowUp/Down`). `[live]`
 - [ ] E.1 Three-finger stepping swipe native (touch-data probe first). E.2 `modifier caps down|up`. E.3 Caps + mouse pan with dead zone and snap. E.4 Three-finger follow experiment. `[live]` each.
+- [ ] F.1 Throw (`move-to-display`): focus does not follow the thrown window. In the 2026-11-05 19:07:25 throw (`/tmp/ribbon-501.log`), Zen activated 100ms after the command and ribbon's focus of Herdr 17ms later did not take; Herdr was focused only by a click at 19:07:31.7. Candidate fix: focus the thrown window again once its move settles. Needs two displays to reproduce. `[live]`
+- [ ] F.2 Throw: the user saw the thrown window land over the target strip's windows without them moving. The 19:07:25 log shows the target retile applied at once; a retile with no command at 19:07:30.9 wrote Herdr to x=-766 on the built-in display, then focus put it back. Reproduce with the log open before changing anything. `[live]`
+- [ ] F.3 Floating windows feel odd (user, 2026-11-05): they stay pinned while the strip scrolls under and over them. Behavior not yet defined. Grill before building.
+- [ ] F.5 Ghost images warped: a cached image captured at another window size stretched under `contentsGravity = .resize` (user, 2026-11-05). Now `.resizeAspectFill`; live-test with F.6.
+- [ ] F.6 Live-test `8f3c31b` (ghost cache races, hand resizes under 16pt) before main.
+- [ ] F.4 Send Rex Beta feedback: give the settings window a panel subrole (`AXDialog` or `AXFloatingWindow`), and answer AX reads faster while opening a window (ribbon's `AXWindowCreated` handler stalled 1242ms on Rex at 19:45:33).
 - Later: natural-height windows; config file + reload + user ignore/float rules; LaunchAgent; Phase 7 main-thread work.
 
 ---
