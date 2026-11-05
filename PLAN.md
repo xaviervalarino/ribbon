@@ -67,6 +67,12 @@ Replaces the resize-based overview: an overlay shows window captures in a Missio
 3. Click focuses and closes; a Space or display change closes. `ScreenshotGrid.swift`, `WindowManager.swift`.
 4. Key-grab tap on `m2/integration`: `InputTap.swift` keyDown mask while the grid is open; hjkl/arrows/Enter/Esc drive it, other keys are swallowed.
 
+**Grid polish after the first live test (2026-11-04, branch `m2/grid-polish` off `m2/integration`):** the user found the 3-per-row grid wasteful, wants Esc to close it, and wants the desktop behind it as in Mission Control.
+- **Packed layout:** justified rows in strip order. Each window is its own tile at its own aspect ratio (a stacked column's windows sit next to each other in stack order); every tile in a row shares the row's height; the row count is the one that gives tiles the largest scale while the whole set fits the display with margins; tiles never exceed their window's size; rows center horizontally and the block centers vertically. Pure layout math lives in RibbonCore with tests.
+- **Navigation on packed rows:** left/right step through strip order, up/down move to the tile in the adjacent row whose center is nearest horizontally, first/last jump to the ends.
+- **Desktop backdrop:** the wallpaper from `NSWorkspace.desktopImageURL(for:)` fills the panel (aspect-fill), loaded off the main thread and cached per screen and URL; the dark fill stays when it cannot load.
+- **Esc** is step 4: Esc closes without focusing, Return focuses the selection, hjkl and the arrows move it, every other key is swallowed until the grid closes. Caps alone is Escape through Karabiner, so a caps tap closes the grid.
+
 ### Known macOS constraints (verified 2026-09)
 - `kAXHiddenAttribute` is app-level only — not settable on window elements (silently fails).
 - Window identity must be `_AXUIElementGetWindow()` → `CGWindowID` (the one private API AeroSpace/yabai use). Never `pid ^ title.hashValue` — dead elements return empty titles, so the destroy path can never match.
