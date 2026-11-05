@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import ScreenCaptureKit
 
 /// An overlay over one display showing a capture of every window of a ribbon, packed into rows.
@@ -37,7 +38,15 @@ final class ScreenshotGrid {
 
     private let panel: NSPanel
     private let root: CALayer
+    /// The display's wallpaper, aspect-filled over a dark fill that shows while it loads or when
+    /// it cannot load.
     private let backdrop = CALayer()
+    /// A light dim that keeps the thumbnails standing out without hiding the wallpaper.
+    private let dim = CALayer()
+    /// The last wallpaper loaded per display, with the URL it came from.
+    private var wallpapers: [CGDirectDisplayID: (url: URL, image: CGImage)] = [:]
+    /// The wallpaper the open grid shows; a load that lands for any other is only cached.
+    private var shownWallpaper: (display: CGDirectDisplayID, url: URL)?
     private let ring = CALayer()
     private var layers: [CGWindowID: CALayer] = [:]
     /// Each thumbnail's window frame in panel coordinates: where it zooms in from and out to.
@@ -54,6 +63,10 @@ final class ScreenshotGrid {
         (panel.contentView as? GridView)?.onMouseDown = { [weak self] point in self?.clicked(at: point) }
         backdrop.backgroundColor = NSColor(white: 0, alpha: 0.6).cgColor
         backdrop.opacity = 0
+        backdrop.contentsGravity = .resizeAspectFill
+        backdrop.masksToBounds = true
+        dim.backgroundColor = NSColor(white: 0, alpha: 0.2).cgColor
+        backdrop.addSublayer(dim)
         root.addSublayer(backdrop)
         ring.borderColor = NSColor.controlAccentColor.cgColor
         ring.borderWidth = 3
@@ -81,6 +94,8 @@ final class ScreenshotGrid {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         backdrop.frame = CGRect(origin: .zero, size: screen.frame.size)
+        dim.frame = backdrop.bounds
+        showWallpaper(of: screen)
         for thumb in thumbnails {
             let layer = Self.makeThumbnailLayer()
             layer.frame = local(thumb.windowFrame)
@@ -138,6 +153,51 @@ final class ScreenshotGrid {
             self.ring.removeFromSuperlayer()
             self.panel.orderOut(nil)
         }
+    }
+
+    /// Puts `screen`'s wallpaper on the backdrop: at once when cached for its current URL,
+    /// otherwise once a background load lands.
+    private func showWallpaper(of screen: NSScreen) {
+        let display = screen.displayID
+        guard let url = NSWorkspace.shared.desktopImageURL(for: screen) else {
+            shownWallpaper = nil
+            backdrop.contents = nil
+            return
+        }
+        shownWallpaper = (display, url)
+        if let cached = wallpapers[display], cached.url == url {
+            backdrop.contents = cached.image
+            return
+        }
+        backdrop.contents = nil
+        let maxPixelSize = max(screen.frame.width, screen.frame.height) * screen.backingScaleFactor
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let image = Self.loadImage(url, maxPixelSize: maxPixelSize)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                guard let image else {
+                    RibbonLog.log("grid wallpaper failed to load \(url.path)", category: "grid")
+                    return
+                }
+                self.wallpapers[display] = (url, image)
+                if self.isOpen, self.shownWallpaper?.display == display, self.shownWallpaper?.url == url {
+                    self.backdrop.contents = image
+                }
+            }
+        }
+    }
+
+    /// Decodes `url` with its longest side at most `maxPixelSize`, so a large wallpaper costs no
+    /// more memory than the display shows.
+    private static func loadImage(_ url: URL, maxPixelSize: CGFloat) -> CGImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+        ]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
     /// Reports the thumbnail under `point` (panel coordinates), or nil for the backdrop.
