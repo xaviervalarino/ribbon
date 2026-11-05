@@ -10,6 +10,8 @@ public struct WindowModel: Identifiable, Equatable, Sendable, Codable {
     public var isFloating: Bool
     /// The smallest height the app accepts; a resize below it leaves the window at this height.
     public var minHeight: Double?
+    /// The smallest width the app accepts; a resize below it leaves the window at this width.
+    public var minWidth: Double?
 
     public init(
         id: CGWindowID,
@@ -53,5 +55,10 @@ public struct ColumnModel: Identifiable, Equatable, Sendable, Codable {
         guard !windows.isEmpty else { return nil }
         let clamped = max(0, min(activeRowIndex, windows.count - 1))
         return windows[clamped]
+    }
+
+    /// The largest minimum width among the column's windows; the column is never laid out narrower.
+    public var minWidth: Double {
+        windows.compactMap(\.minWidth).max() ?? 0
     }
 }
