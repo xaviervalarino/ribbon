@@ -3,7 +3,8 @@ import ScreenCaptureKit
 
 /// Blocks drawn where a window belongs while its app is too slow to show it there, so a slide
 /// never leaves an empty slot. A block shows an image of its window, captured when the ghost first
-/// shows, once Screen Recording is granted; until then it is a plain fill. A block cut at a display
+/// shows; a block with no image yet stays hidden until its capture lands, and fades in as a plain
+/// fill when the capture fails (Screen Recording not granted). A block cut at a display
 /// edge runs past it, so it reads as the window overflowing. The panels sit one level below normal
 /// windows, so they show only through gaps; window discovery admits layer 0 only, so they are never
 /// tiled.
@@ -13,6 +14,8 @@ final class SlotGhosts {
     private var panels: [CGWindowID: NSPanel] = [:]
     private var spare: [NSPanel] = []
     private var capturing: Set<CGWindowID> = []
+    /// Ghosts kept invisible until their first image lands, so they never show the plain fill.
+    private var awaitingImage: Set<CGWindowID> = []
 
     /// Window images shared by every `SlotGhosts`, so a window handed between the slide ghosts and
     /// the seam ghosts keeps its image instead of showing the plain fill while it is captured again.
@@ -35,10 +38,11 @@ final class SlotGhosts {
         panels[id] = panel
         if isNew {
             Self.users[id, default: 0] += 1
+            if Self.snapshots[id] == nil { awaitingImage.insert(id) }
             // A cached image shows at once; a fresh capture replaces it.
             capture(id)
         }
-        panel.alphaValue = 1
+        panel.alphaValue = awaitingImage.contains(id) ? 0 : 1
         panel.setFrame(Self.cocoaRect(frame), display: false)
         let window = window ?? frame
         if let block = Self.block(of: panel), window.width > 0, window.height > 0 {
@@ -72,6 +76,7 @@ final class SlotGhosts {
         var fading: [NSPanel] = []
         for id in ids {
             guard let panel = panels.removeValue(forKey: id) else { continue }
+            awaitingImage.remove(id)
             Self.release(id)
             fading.append(panel)
         }
@@ -130,9 +135,16 @@ final class SlotGhosts {
             let ms = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
             RibbonLog.log("ghost capture wid=\(id) \(image == nil ? "failed \(error.map { "\($0)" } ?? "no window")" : "ok") \(ms)ms",
                           category: "slide")
-            guard let image, Self.users[id] != nil else { return }
-            Self.snapshots[id] = image
-            if let panel = self.panels[id] { Self.block(of: panel)?.layer?.contents = image }
+            if let image, Self.users[id] != nil { Self.snapshots[id] = image }
+            guard let panel = self.panels[id] else { return }
+            if let image { Self.block(of: panel)?.layer?.contents = image }
+            // A failed capture (no Screen Recording grant) fades in the plain fill.
+            if self.awaitingImage.remove(id) != nil {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.12
+                    panel.animator().alphaValue = 1
+                }
+            }
         }
     }
 
