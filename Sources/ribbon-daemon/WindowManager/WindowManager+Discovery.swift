@@ -261,6 +261,7 @@ extension WindowManager {
 
         observer.observeWindow(element: win, pid: pid)
         adoptedSinceLastSweep.insert(id)
+        SlotGhosts.warm(id)
         return sID
     }
 
@@ -268,6 +269,7 @@ extension WindowManager {
         if let win = trackedWindows.removeValue(forKey: id) {
             windowIDsByElement.removeValue(forKey: win.rawElement)
         }
+        SlotGhosts.forget(id)
         spaceByWindowID.removeValue(forKey: id)
         displayByWindowID.removeValue(forKey: id)
         lastAppliedFrames.removeValue(forKey: id)
@@ -335,6 +337,7 @@ extension WindowManager {
         if let elem = trackedWindows.removeValue(forKey: id) {
             windowIDsByElement.removeValue(forKey: elem.rawElement)
         }
+        SlotGhosts.forget(id)
         lastAppliedFrames.removeValue(forKey: id)
         lastStashedState.removeValue(forKey: id)
         lastNaturalFrames.removeValue(forKey: id)
