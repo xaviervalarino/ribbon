@@ -144,10 +144,14 @@ extension WindowManager: AXEventObserverDelegate {
             guard let self else { return }
             self.resizeDebounceWork = nil
             guard let newSize = self.serverFrame(id)?.size else { return }
-            if let last = self.lastAppliedFrames[id], abs(last.size.width - newSize.width) < 2.0 {
+            // Apps settle a few points off the width they are given (terminals round to a cell,
+            // UTM to its display); adopting that as a manual resize starts a resize loop.
+            if let last = self.lastAppliedFrames[id], abs(last.size.width - newSize.width) < 16 {
                 return
             }
-            let ratio = max(0.15, min(1.0, Double(newSize.width) / Double(canvasW)))
+            // The inverse of columnGeometry's width: ratio × (canvas + gap) − gap.
+            let gap = self.config.windowGap
+            let ratio = max(0.15, min(1.0, (Double(newSize.width) + gap) / (Double(canvasW) + gap)))
             if var r = self.ribbons[sID] {
                 if r.setWidthRatio(ratio, forWindowID: id) {
                     let applied = self.lastAppliedFrames[id].map { "\(Int($0.width))" } ?? "none"
