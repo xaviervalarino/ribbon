@@ -213,9 +213,14 @@ public final class WindowManager {
             self?.closeScreenshotGrid(focusSelection: id != nil, windowID: id)
         }
         // The grid grabs the keyboard while open, as Mission Control does, so no key leaks into
-        // the app behind it.
-        screenshotGrid.onOpenChange = { [weak self] isOpen in
-            self?.inputTap.setKeyMonitoring(isOpen)
+        // the app behind it. The grid can close inside the tap's own callback (a mouse-up that
+        // changes Space), and rebuilding the tap there invalidates the port delivering the event,
+        // so the change waits for the callback to return and then follows the grid's state.
+        screenshotGrid.onOpenChange = { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.inputTap.setKeyMonitoring(self.screenshotGrid.isOpen)
+            }
         }
         // Reads live config on every check, so later config changes apply.
         observer.shouldObserve = { [weak self] app in

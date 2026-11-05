@@ -27,8 +27,12 @@ final class InputTap {
     private var loggedUnavailable = false
     private var gestureMonitoring = false
     private var pointerMonitoring = false
-    /// While on, every key press and release is swallowed and presses go to the delegate.
+    /// While on, every key press is swallowed and goes to the delegate, and so is the release of
+    /// each swallowed press.
     private var keyMonitoring = false
+    /// Key codes pressed and swallowed since key monitoring turned on. A key already held when it
+    /// turned on is absent, so its release reaches the app that saw its press.
+    private var swallowedKeys: Set<Int64> = []
     /// While a pan is held the cursor stays where the hold began and mouse motion only pans: each
     /// move warps it back. A warp holds off local mouse events for the suppression interval;
     /// 0.07s is the shortest that still holds the cursor still, and the default 0.25s would stall
@@ -91,6 +95,7 @@ final class InputTap {
     func setKeyMonitoring(_ on: Bool) {
         guard on != keyMonitoring else { return }
         keyMonitoring = on
+        swallowedKeys.removeAll()
         start()
     }
 
@@ -165,12 +170,14 @@ final class InputTap {
         case .keyDown:
             guard keyMonitoring else { return true }
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            // After the callback returns, so a key that ends key monitoring never recreates the
-            // tap from inside its own callback.
+            swallowedKeys.insert(keyCode)
+            // After the callback returns, like every key-monitoring change, so a key that closes
+            // the grid never rebuilds the tap from inside its own callback.
             DispatchQueue.main.async { [weak self] in self?.delegate?.keyDown(keyCode: keyCode) }
             return false
         case .keyUp:
-            return !keyMonitoring
+            guard keyMonitoring else { return true }
+            return swallowedKeys.remove(event.getIntegerValueField(.keyboardEventKeycode)) == nil
         default:
             break
         }

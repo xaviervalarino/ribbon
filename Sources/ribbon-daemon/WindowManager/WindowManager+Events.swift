@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import CoreGraphics
 
 extension WindowManager {
@@ -444,9 +445,13 @@ extension WindowManager: InputTapDelegate {
         panController.handleMotion(dx: dx)
     }
 
-    /// Virtual key codes of h/j/k/l and the arrow keys, by grid direction.
+    /// Virtual key codes of h/j/k/l and the arrow keys, by grid direction. Key codes name key
+    /// positions, so h/j/k/l keep their places under any keyboard layout.
     private static let gridKeyDirections: [Int64: String] = [
-        4: "left", 123: "left", 38: "down", 125: "down", 40: "up", 126: "up", 37: "right", 124: "right",
+        Int64(kVK_ANSI_H): "left", Int64(kVK_LeftArrow): "left",
+        Int64(kVK_ANSI_J): "down", Int64(kVK_DownArrow): "down",
+        Int64(kVK_ANSI_K): "up", Int64(kVK_UpArrow): "up",
+        Int64(kVK_ANSI_L): "right", Int64(kVK_RightArrow): "right",
     ]
 
     /// Drives the open grid: Esc closes it, Return or keypad Enter focuses the selection, and
@@ -454,9 +459,9 @@ extension WindowManager: InputTapDelegate {
     func keyDown(keyCode: Int64) {
         guard screenshotGrid.isOpen else { return }
         switch keyCode {
-        case 53:
+        case Int64(kVK_Escape):
             closeScreenshotGrid(focusSelection: false)
-        case 36, 76:
+        case Int64(kVK_Return), Int64(kVK_ANSI_KeypadEnter):
             closeScreenshotGrid(focusSelection: true)
         default:
             if let direction = Self.gridKeyDirections[keyCode] {

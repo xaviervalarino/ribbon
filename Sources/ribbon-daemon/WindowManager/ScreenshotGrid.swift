@@ -27,15 +27,12 @@ final class ScreenshotGrid {
     /// Runs on a click in the grid with the clicked thumbnail's window, or nil for the backdrop.
     var onClick: ((CGWindowID?) -> Void)?
 
-    /// Runs with true when the grid opens and false when it closes, by any path.
+    /// Runs with true when the grid opens and false when it closes, by any path. Reopening an
+    /// open grid runs neither.
     var onOpenChange: ((Bool) -> Void)?
 
     /// The Space whose ribbon the grid shows; nil while closed.
-    private(set) var spaceID: WindowManager.SpaceID? {
-        didSet {
-            if (oldValue == nil) != (spaceID == nil) { onOpenChange?(isOpen) }
-        }
-    }
+    private(set) var spaceID: WindowManager.SpaceID?
     var isOpen: Bool { spaceID != nil }
     var selectedWindowID: CGWindowID? { thumbnails.indices.contains(selectedIndex) ? thumbnails[selectedIndex].id : nil }
 
@@ -85,10 +82,12 @@ final class ScreenshotGrid {
     /// tile, and captures every window at its thumbnail's pixel size.
     func open(thumbnails: [Thumbnail], selectedID: CGWindowID?, spaceID: WindowManager.SpaceID,
               screen: NSScreen, displayFrame: CGRect) {
-        close()
+        let wasOpen = isOpen
+        dismiss()
         self.thumbnails = thumbnails
         selectedIndex = thumbnails.firstIndex { $0.id == selectedID } ?? 0
         self.spaceID = spaceID
+        if !wasOpen { onOpenChange?(true) }
         generation += 1
         let opening = generation
         self.displayFrame = displayFrame
@@ -141,6 +140,13 @@ final class ScreenshotGrid {
 
     /// Zooms every thumbnail back to its window's frame and hides the panel once they land.
     func close() {
+        guard isOpen else { return }
+        dismiss()
+        onOpenChange?(false)
+    }
+
+    /// Closes as `close` does without running `onOpenChange`, for `open` to clear a shown grid.
+    private func dismiss() {
         guard isOpen else { return }
         thumbnails = []
         spaceID = nil
