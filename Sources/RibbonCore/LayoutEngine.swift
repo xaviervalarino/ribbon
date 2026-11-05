@@ -164,7 +164,7 @@ public struct LayoutEngine: Sendable {
             let col = ribbon.columns[0]
             let effectiveRatio = col.hasExplicitSingleWidth ? col.widthRatio : 1.0
             let width = (effectiveRatio >= 0.999) ? canvasWidth : floor(min(canvasWidth, effectiveRatio * canvasWidth))
-            return [(x: 0.0, width: max(width, col.minWidth))]
+            return [(x: 0.0, width: max(width, min(col.minWidth, canvasWidth)))]
         }
 
         var currentX = 0.0
@@ -176,7 +176,8 @@ public struct LayoutEngine: Sendable {
                 let rawWidth = col.widthRatio * (canvasWidth + config.windowGap) - config.windowGap
                 ratioWidth = floor(max(50.0, min(canvasWidth, rawWidth)))
             }
-            let width = max(ratioWidth, col.minWidth)
+            // A minimum wider than the canvas overflows the window, not the layout.
+            let width = max(ratioWidth, min(col.minWidth, canvasWidth))
             result.append((x: currentX, width: width))
             currentX += width + config.windowGap
         }
