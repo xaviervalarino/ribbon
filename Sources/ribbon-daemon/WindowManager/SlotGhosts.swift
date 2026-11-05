@@ -249,7 +249,8 @@ final class SlotGhosts {
         block.layer?.borderWidth = 1
         block.layer?.cornerRadius = 10
         block.layer?.masksToBounds = true
-        block.layer?.contentsGravity = .resize
+        // A cached image captured at another window size scales evenly and crops, never stretches.
+        block.layer?.contentsGravity = .resizeAspectFill
         container.addSubview(block)
         panel.contentView = container
         return panel
