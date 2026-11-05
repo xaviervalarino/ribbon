@@ -183,9 +183,10 @@ final class ScreenshotGrid {
             return
         }
         backdrop.contents = nil
-        let maxPixelSize = max(screen.frame.width, screen.frame.height) * screen.backingScaleFactor
+        let screenPixels = CGSize(width: screen.frame.width * screen.backingScaleFactor,
+                                  height: screen.frame.height * screen.backingScaleFactor)
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let image = Self.loadImage(url, maxPixelSize: maxPixelSize)
+            let image = Self.loadImage(url, filling: screenPixels)
             DispatchQueue.main.async {
                 guard let self else { return }
                 guard let image else {
@@ -200,10 +201,25 @@ final class ScreenshotGrid {
         }
     }
 
-    /// Decodes `url` with its longest side at most `maxPixelSize`, so a large wallpaper costs no
-    /// more memory than the display shows.
-    private static func loadImage(_ url: URL, maxPixelSize: CGFloat) -> CGImage? {
+    /// Decodes `url` at the size that aspect-fills `screenPixels`, never above the image's own
+    /// size, so a large wallpaper costs no more memory than the display shows and a wallpaper of
+    /// another shape is not upscaled past its decoded size. An image without a pixel size
+    /// decodes with its longest side at the screen's longest side.
+    private static func loadImage(_ url: URL, filling screenPixels: CGSize) -> CGImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        var maxPixelSize = max(screenPixels.width, screenPixels.height)
+        if let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+           var imageWidth = properties[kCGImagePropertyPixelWidth] as? CGFloat,
+           var imageHeight = properties[kCGImagePropertyPixelHeight] as? CGFloat,
+           imageWidth > 0, imageHeight > 0 {
+            // EXIF orientations 5-8 turn the image a quarter, and the decode applies the turn.
+            if let orientation = properties[kCGImagePropertyOrientation] as? Int, orientation >= 5 {
+                swap(&imageWidth, &imageHeight)
+            }
+            let longestSide = max(imageWidth, imageHeight)
+            let fillScale = max(screenPixels.width / imageWidth, screenPixels.height / imageHeight)
+            maxPixelSize = min(longestSide, (fillScale * longestSide).rounded(.up))
+        }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
