@@ -212,6 +212,11 @@ public final class WindowManager {
         screenshotGrid.onClick = { [weak self] id in
             self?.closeScreenshotGrid(focusSelection: id != nil, windowID: id)
         }
+        // The grid grabs the keyboard while open, as Mission Control does, so no key leaks into
+        // the app behind it.
+        screenshotGrid.onOpenChange = { [weak self] isOpen in
+            self?.inputTap.setKeyMonitoring(isOpen)
+        }
         // Reads live config on every check, so later config changes apply.
         observer.shouldObserve = { [weak self] app in
             guard let self, let name = app.localizedName else { return true }

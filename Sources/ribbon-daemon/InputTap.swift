@@ -10,6 +10,8 @@ protocol InputTapDelegate: AnyObject {
     func pointerMoved(dx: Double)
     func gesture(_ event: CGEvent)
     func swipe(_ event: CGEvent)
+    /// A key press while key monitoring is on; the key never reaches apps.
+    func keyDown(keyCode: Int64)
 }
 
 private let inputTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -25,6 +27,8 @@ final class InputTap {
     private var loggedUnavailable = false
     private var gestureMonitoring = false
     private var pointerMonitoring = false
+    /// While on, every key press and release is swallowed and presses go to the delegate.
+    private var keyMonitoring = false
     /// While a pan is held the cursor stays where the hold began and mouse motion only pans: each
     /// move warps it back. A warp holds off local mouse events for the suppression interval;
     /// 0.07s is the shortest that still holds the cursor still, and the default 0.25s would stall
@@ -44,6 +48,9 @@ final class InputTap {
         }
         if gestureMonitoring {
             list.append(contentsOf: [gestureEventType, swipeEventType])
+        }
+        if keyMonitoring {
+            list.append(contentsOf: [.keyDown, .keyUp])
         }
         return list
     }
@@ -81,6 +88,12 @@ final class InputTap {
         start()
     }
 
+    func setKeyMonitoring(_ on: Bool) {
+        guard on != keyMonitoring else { return }
+        keyMonitoring = on
+        start()
+    }
+
     func start() {
         stop()
 
@@ -88,9 +101,9 @@ final class InputTap {
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            // A held pan swallows scrolls, which needs an active tap; outside a pan the tap only
-            // listens, so input never waits on the main run loop.
-            options: pointerMonitoring ? .defaultTap : .listenOnly,
+            // A held pan swallows scrolls and key monitoring swallows keys, which needs an active
+            // tap; otherwise the tap only listens, so input never waits on the main run loop.
+            options: pointerMonitoring || keyMonitoring ? .defaultTap : .listenOnly,
             eventsOfInterest: mask,
             callback: inputTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -149,6 +162,15 @@ final class InputTap {
             delegate?.gesture(event)
         case swipeEventType:
             delegate?.swipe(event)
+        case .keyDown:
+            guard keyMonitoring else { return true }
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            // After the callback returns, so a key that ends key monitoring never recreates the
+            // tap from inside its own callback.
+            DispatchQueue.main.async { [weak self] in self?.delegate?.keyDown(keyCode: keyCode) }
+            return false
+        case .keyUp:
+            return !keyMonitoring
         default:
             break
         }

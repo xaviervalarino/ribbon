@@ -444,6 +444,27 @@ extension WindowManager: InputTapDelegate {
         panController.handleMotion(dx: dx)
     }
 
+    /// Virtual key codes of h/j/k/l and the arrow keys, by grid direction.
+    private static let gridKeyDirections: [Int64: String] = [
+        4: "left", 123: "left", 38: "down", 125: "down", 40: "up", 126: "up", 37: "right", 124: "right",
+    ]
+
+    /// Drives the open grid: Esc closes it, Return or keypad Enter focuses the selection, and
+    /// h/j/k/l and the arrows move it. Other keys do nothing; the tap already swallowed them.
+    func keyDown(keyCode: Int64) {
+        guard screenshotGrid.isOpen else { return }
+        switch keyCode {
+        case 53:
+            closeScreenshotGrid(focusSelection: false)
+        case 36, 76:
+            closeScreenshotGrid(focusSelection: true)
+        default:
+            if let direction = Self.gridKeyDirections[keyCode] {
+                _ = screenshotGrid.moveSelection(direction)
+            }
+        }
+    }
+
     func setTouchesProbe(_ on: Bool) {
         touchesProbe.bucketTimer?.cancel()
         touchesProbe.bucketTimer = nil

@@ -27,8 +27,15 @@ final class ScreenshotGrid {
     /// Runs on a click in the grid with the clicked thumbnail's window, or nil for the backdrop.
     var onClick: ((CGWindowID?) -> Void)?
 
+    /// Runs with true when the grid opens and false when it closes, by any path.
+    var onOpenChange: ((Bool) -> Void)?
+
     /// The Space whose ribbon the grid shows; nil while closed.
-    private(set) var spaceID: WindowManager.SpaceID?
+    private(set) var spaceID: WindowManager.SpaceID? {
+        didSet {
+            if (oldValue == nil) != (spaceID == nil) { onOpenChange?(isOpen) }
+        }
+    }
     var isOpen: Bool { spaceID != nil }
     var selectedWindowID: CGWindowID? { thumbnails.indices.contains(selectedIndex) ? thumbnails[selectedIndex].id : nil }
 
