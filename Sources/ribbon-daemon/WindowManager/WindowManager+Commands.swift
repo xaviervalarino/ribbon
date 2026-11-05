@@ -188,6 +188,9 @@ extension WindowManager {
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
         // A pan survives the hold that drives it and commands that change nothing.
         if action != "pan" && action != "status" {
+            // A command that returns before the retile below would leave the strip where the pan
+            // left it; that retile cancels this one.
+            if panController.isPanning { scheduleRetile(animated: true) }
             panController.endPan(snap: false)
         }
 
@@ -364,7 +367,10 @@ extension WindowManager {
         )
 
         let newActive = ribbon.activeWindow?.id
-        retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: true)
+        // Entering or leaving overview resizes every window; a slide before those resizes only
+        // adds a second stage, so overview changes jump.
+        let overviewChanged = beforeRibbon.isOverview != ribbon.isOverview
+        retileNow(focusWindowID: newActive != previousActive ? newActive : nil, animated: !overviewChanged)
 
         if openMissionControlAfterRetile {
             // A command that left overview before the slide settled cancels the launch.
