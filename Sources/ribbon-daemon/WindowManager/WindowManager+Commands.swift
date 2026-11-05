@@ -188,6 +188,9 @@ extension WindowManager {
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
         // A pan survives the hold that drives it and commands that change nothing.
         if action != "pan" && action != "status" {
+            // A command that returns before the retile below would leave the strip where the pan
+            // left it; that retile cancels this one.
+            if panController.isPanning { scheduleRetile(animated: true) }
             panController.endPan(snap: false)
         }
 
