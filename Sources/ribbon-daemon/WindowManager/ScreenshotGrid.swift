@@ -21,6 +21,9 @@ final class ScreenshotGrid {
 
     static let cellMargin = 12.0
 
+    /// Runs when a thumbnail is clicked, after its window became the selection.
+    var onClick: ((CGWindowID) -> Void)?
+
     /// The ribbon copy whose active window carries the selection ring; nil while closed.
     private(set) var selection: Ribbon?
     var isOpen: Bool { selection != nil }
@@ -44,6 +47,7 @@ final class ScreenshotGrid {
     init() {
         panel = Self.makePanel()
         root = panel.contentView!.layer!
+        (panel.contentView as? GridView)?.onMouseDown = { [weak self] point in self?.clicked(at: point) }
         backdrop.backgroundColor = NSColor(white: 0, alpha: 0.6).cgColor
         backdrop.opacity = 0
         root.addSublayer(backdrop)
@@ -139,6 +143,13 @@ final class ScreenshotGrid {
         }
     }
 
+    /// Selects the thumbnail under `point` (panel coordinates) and reports it.
+    private func clicked(at point: CGPoint) {
+        guard isOpen, let id = layers.first(where: { $0.value.frame.contains(point) })?.key else { return }
+        selection?.focus(windowID: id)
+        onClick?(id)
+    }
+
     private func placeRing() {
         guard let id = selectedWindowID, let layer = layers[id] else {
             ring.isHidden = true
@@ -229,9 +240,20 @@ final class ScreenshotGrid {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
-        let view = NSView()
+        let view = GridView()
         view.wantsLayer = true
         panel.contentView = view
         return panel
+    }
+}
+
+/// Reports clicks in its own coordinates, which match the layer frames above.
+private final class GridView: NSView {
+    var onMouseDown: ((CGPoint) -> Void)?
+
+    override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+    override func mouseDown(with event: NSEvent) {
+        onMouseDown?(convert(event.locationInWindow, from: nil))
     }
 }

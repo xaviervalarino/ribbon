@@ -191,6 +191,7 @@ public final class WindowManager {
 
     public init() {
         observer.delegate = self
+        screenshotGrid.onClick = { [weak self] _ in self?.closeScreenshotGrid(focusSelection: true) }
         // Reads live config on every check, so later config changes apply.
         observer.shouldObserve = { [weak self] app in
             guard let self, let name = app.localizedName else { return true }
@@ -409,6 +410,7 @@ public final class WindowManager {
     }
 
     func displayConfigurationBegan() {
+        screenshotGrid.close()
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil
@@ -417,6 +419,7 @@ public final class WindowManager {
     }
 
     func displayConfigurationChanged() {
+        screenshotGrid.close()
         isDisplayReconfiguring = true
         retileWork?.cancel()
         retileWork = nil

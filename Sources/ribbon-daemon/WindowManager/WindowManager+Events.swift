@@ -7,6 +7,7 @@ extension WindowManager {
     // MARK: - Space Change Handling
 
     public func handleActiveSpaceDidChange() {
+        screenshotGrid.close()
         guard !isDisplayReconfiguring else { return }
 
         let topology = SpaceManager.currentTopology()
