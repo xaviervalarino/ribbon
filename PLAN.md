@@ -118,6 +118,7 @@ Open pain, measured in `/tmp/ribbon-501.log` (2026-10-21 to 10-28): main-thread 
 - [x] Adopt manual mouse resizes into the column width ratio (observe `kAXResized` from user, via the echo ledger); manual moves snap back on next retile.
 - [x] Test `focus up/down`, `slurp`, `barf`.
 - [ ] Column jumps for long ribbons: `focus first|last` and `move first|last` (move the active column to the strip's start or end). One long slide each; with focus at slide end only the landing window activates.
+- [ ] `grow|shrink up|down` for stacked columns: a height ratio per window (stacked windows split height evenly today, honoring only learned minimums), layout that reads it, and manual vertical resizes adopted into it. Binds: Caps+W `shift .`/`shift ,` move the bottom edge, Caps+E the top edge. A lone window stays full height (natural-height windows are deferred).
 - [ ] Window tags: mark a window with a tag, then `focus tag <name>` jumps to it from anywhere in the ribbon.
 - [ ] Open questions on stacked columns (raised 2026-10-17):
   - Mail keeps a minimum width, so in a stacked column it sticks out past the column. Should the column widen to the largest minimum width of its windows? Minimum heights are already learned and honored.
