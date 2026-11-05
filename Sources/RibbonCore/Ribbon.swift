@@ -1,6 +1,24 @@
 import Foundation
 import CoreGraphics
 
+/// A direction of the `focus` command; h, j, k and l alias left, down, up and right.
+public enum FocusDirection: Sendable {
+    case left, right, up, down, first, last
+
+    /// Nil for a name that is no direction.
+    public init?(_ name: String) {
+        switch name {
+        case "left", "h": self = .left
+        case "right", "l": self = .right
+        case "up", "k": self = .up
+        case "down", "j": self = .down
+        case "first": self = .first
+        case "last": self = .last
+        default: return nil
+        }
+    }
+}
+
 public struct Ribbon: Sendable, Codable {
     public var columns: [ColumnModel]
     public var activeColumnIndex: Int
@@ -73,6 +91,21 @@ public struct Ribbon: Sendable, Codable {
     public mutating func focusRowDown(perRow: Int) {
         guard perRow > 0, activeColumnIndex / perRow < (columns.count - 1) / perRow else { return }
         activeColumnIndex = min(columns.count - 1, activeColumnIndex + perRow)
+    }
+
+    /// Moves focus as the `focus` command does: up and down move grid rows in the overview and
+    /// rows of the active column otherwise. Returns false for an unknown direction.
+    public mutating func focus(direction: String, perRow: Int) -> Bool {
+        guard let direction = FocusDirection(direction) else { return false }
+        switch direction {
+        case .left: focusLeft()
+        case .right: focusRight()
+        case .up: isOverview ? focusRowUp(perRow: perRow) : focusUp()
+        case .down: isOverview ? focusRowDown(perRow: perRow) : focusDown()
+        case .first: focusFirst()
+        case .last: focusLast()
+        }
+        return true
     }
 
     // MARK: - Reordering & Manipulation

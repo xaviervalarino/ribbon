@@ -38,6 +38,41 @@ A native macOS scrollable tiling window manager (Niri/PaperWM-style 1D column st
 - **Implementers**: `gemini-3.8-flash-high` for exact-file jobs, `gemini-4-argon-medium` for new subsystems and layout design; both pre-approved for milestone 2. Job specs: `.claude/plans/milestone-2.md` (gitignored).
 - **Dropped**: resource use (the user judges it fine; the daemon measures at 0.08% CPU). Deferred: natural-height windows, zoom-style overview (needs capture or private APIs).
 
+### Settled decisions (grill round 4, 2026-11-04): screenshot grid
+Replaces the resize-based overview: an overlay shows window captures in a Mission Control–style grid, and real windows never move. *Why:* the resize overview's last AX write lands 101–132ms after the command (4 windows, daemon log 2026-11-05), and the slide-then-resize looked like two stages.
+- **Freshness: cache + refresh.** Each strip window is captured in the background when it loses focus or a slide settles; the grid opens on cached images at once and refreshes them while open. *Why:* one `SCScreenshotManager` capture averages 203ms, max 552ms (last 200 ghost captures, daemon log 2026-11-04), slower than the resize overview, so capturing on open would lose. Each capture refetches `SCShareableContent`; measure that share and fetch once per batch.
+- **Input: grab keys while open.** An event tap swallows hjkl/arrows/Enter/Esc while the grid is up; Caps+W is not needed. The tap must never outlive the grid.
+- **Animation: zoom.** Thumbnails fly from each window's frame into the grid and back, in the overlay only.
+- **Contents: current strip.** Only the active Space's ribbon on the active display; floats and other displays stay out.
+- **Adopted defaults:** layout reuses the overview grid math (`overviewColumnsPerRow` = 3), each thumbnail aspect-fit inside its cell with a margin; a click focuses that window and closes the grid, hover highlights.
+- **Ctrl+M opens the grid** (round 5). The resize overview stays as an unbound `overview resize` fallback. *Why:* it works and costs nothing to keep.
+- **Other keys are swallowed** while the grid is open, as in Mission Control, so nothing leaks into the app behind.
+- **`overview mission-control` is dropped**: it existed because Mission Control on the raw strip was too zoomed out, which the grid solves.
+- **Captures keep about twice the grid cell's pixel size**: a few MB per window, sharp in the grid, slightly soft at the start of the zoom. Upgrade path: full resolution (~15–20MB per Retina window) if the zoom looks soft.
+- **Adopted defaults (round 5):** Ctrl+M again closes like Esc; a Space or display change closes the grid; stacked columns split their cell as the resize overview does; the key tap lives only while the grid is up and dies with the daemon.
+- **Parked windows capture whole** (`debug capture-probe`, 2026-11-05, 5 windows on a 1512pt display): a desktop-independent-window capture of a window parked at x=1511 (1pt on screen) returned the full 3016x1890 image with its content. One shared `SCShareableContent` fetch took 69ms; captures then took 30–119ms each. `SLSHWCaptureWindowList` still returns only the on-screen clip.
+- **Ponytail ultra fold (2026-11-04)** narrows the build:
+  - The cache is the last capture per window, taken when the grid opens and shown at once on the next open; no focus-loss or slide-settle triggers. The first open shows placeholder blocks until captures land. Background refresh returns only if the parked-window probe fails.
+  - One `SCShareableContent` fetch per open, shared by every capture (each ghost capture refetches today, `SlotGhosts.swift:59`).
+  - Captures request the grid cell's pixel size (`config.width/height`); no separate resolution policy.
+  - Hover highlight is cut.
+  - Cell frames come from `LayoutEngine.computePlan` on a copy of the ribbon with `isOverview = true`, so stacked columns split their cell as today. The real ribbon never enters overview for the grid, and grid `focus` commands move the highlight without retiling.
+  - The key-grab tap is the last step, built on `m2/integration` (the input tap lives on `m2/gestures`); until then Caps+W+hjkl moves the highlight and Caps+W+M toggles.
+  - The resize overview stays reachable as `overview resize`, its code untouched. `overview mission-control` and `mission-control` are removed.
+
+**Build sequence (m2/screenshot-grid unless noted):**
+0. Probe: `debug capture-probe` in `DebugProbes.swift` captures every strip window once, writes each image to `/tmp/ribbon-capture-probe/<wid>.png` with window size, image size, parked state and timings (one shared fetch vs each capture). Read-only; the user restarts and runs it.
+1. Static grid: new `WindowManager/ScreenshotGrid.swift` (one overlay panel per active display, a layer per window, aspect-fit in its cell with a margin, selection ring); `WindowManager+Commands.swift` routes `overview` to the grid, `focus` moves its selection, any other command closes it (`overview` again focuses the selection, Esc path later).
+2. Zoom in and out from each window's frame (`NSAnimationContext`), `ScreenshotGrid.swift` only.
+3. Click focuses and closes; a Space or display change closes. `ScreenshotGrid.swift`, `WindowManager.swift`.
+4. Key-grab tap on `m2/integration`: `InputTap.swift` keyDown mask while the grid is open; hjkl/arrows/Enter/Esc drive it, other keys are swallowed.
+
+**Grid polish after the first live test (2026-11-04, branch `m2/grid-polish` off `m2/integration`):** the user found the 3-per-row grid wasteful, wants Esc to close it, and wants the desktop behind it as in Mission Control.
+- **Packed layout:** justified rows in strip order. Each window is its own tile at its own aspect ratio (a stacked column's windows sit next to each other in stack order); every tile in a row shares the row's height; the row count is the one that gives tiles the largest scale while the whole set fits the display with margins; tiles never exceed their window's size; rows center horizontally and the block centers vertically. Pure layout math lives in RibbonCore with tests.
+- **Navigation on packed rows:** left/right step through strip order, up/down move to the tile in the adjacent row whose center is nearest horizontally, first/last jump to the ends.
+- **Desktop backdrop:** the wallpaper from `NSWorkspace.desktopImageURL(for:)` fills the panel (aspect-fill), loaded off the main thread and cached per screen and URL; the dark fill stays when it cannot load.
+- **Esc** is step 4: Esc closes without focusing, Return focuses the selection, hjkl and the arrows move it, every other key is swallowed until the grid closes. Caps alone is Escape through Karabiner, so a caps tap closes the grid.
+
 ### Known macOS constraints (verified 2026-09)
 - `kAXHiddenAttribute` is app-level only — not settable on window elements (silently fails).
 - Window identity must be `_AXUIElementGetWindow()` → `CGWindowID` (the one private API AeroSpace/yabai use). Never `pid ^ title.hashValue` — dead elements return empty titles, so the destroy path can never match.

@@ -433,6 +433,82 @@ func runTests() {
     navRibbon.focusRowUp(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
 
+    // 14b. packedGrid lays windows out in justified rows
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [], in: CGRect(x: 0, y: 0, width: 100, height: 100), gap: 10),
+                           [], "No sizes, no tiles")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 800, height: 600)],
+                                                   in: CGRect(x: 0, y: 0, width: 1000, height: 1000), gap: 10),
+                           [CGRect(x: 100, y: 200, width: 800, height: 600)],
+                           "A single small window stays at its own size, centered")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 2000, height: 1000)],
+                                                   in: CGRect(x: 50, y: 50, width: 1000, height: 1000), gap: 10),
+                           [CGRect(x: 50, y: 300, width: 1000, height: 500)],
+                           "A single large window shrinks to the bounds' width, centered vertically")
+    let square = CGSize(width: 1000, height: 1000)
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: Array(repeating: square, count: 4),
+                                                   in: CGRect(x: 0, y: 0, width: 1010, height: 1010), gap: 10),
+                           [CGRect(x: 0, y: 0, width: 500, height: 500), CGRect(x: 510, y: 0, width: 500, height: 500),
+                            CGRect(x: 0, y: 510, width: 500, height: 500), CGRect(x: 510, y: 510, width: 500, height: 500)],
+                           "Four squares in a square take two rows of two")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: Array(repeating: square, count: 2),
+                                                   in: CGRect(x: 0, y: 0, width: 2010, height: 1000), gap: 10),
+                           [CGRect(x: 0, y: 0, width: 1000, height: 1000), CGRect(x: 1010, y: 0, width: 1000, height: 1000)],
+                           "Two squares on a wide display share one row")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: Array(repeating: square, count: 3),
+                                                   in: CGRect(x: 0, y: 0, width: 1010, height: 1010), gap: 10),
+                           [CGRect(x: 0, y: 0, width: 500, height: 500), CGRect(x: 510, y: 0, width: 500, height: 500),
+                            CGRect(x: 255, y: 510, width: 500, height: 500)],
+                           "The fuller row comes first and the shorter row centers")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 1500, height: 1000), CGSize(width: 500, height: 1000)],
+                                                   in: CGRect(x: 0, y: 0, width: 3000, height: 1000), gap: 0),
+                           [CGRect(x: 500, y: 0, width: 1500, height: 1000), CGRect(x: 2000, y: 0, width: 500, height: 1000)],
+                           "Tiles in a row share its height and keep their own aspect")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 1000, height: 500), square],
+                                                   in: CGRect(x: 0, y: 0, width: 10000, height: 10000), gap: 0).map(\.size),
+                           [CGSize(width: 1000, height: 500), square],
+                           "No tile grows past its window's size")
+    let manyBounds = CGRect(x: 0, y: 0, width: 1512, height: 900)
+    let many = LayoutEngine.packedGrid(sizes: (0..<13).map { CGSize(width: 1200 + $0 * 30, height: 900) },
+                                       in: manyBounds, gap: 20)
+    TestRunner.assertEqual(many.count, 13, "Many windows each get a tile")
+    TestRunner.assertTrue(many.allSatisfy { manyBounds.insetBy(dx: -0.001, dy: -0.001).contains($0) },
+                          "Many windows fit the bounds")
+    TestRunner.assertTrue(zip(many, many.dropFirst()).allSatisfy { a, b in
+        (a.minY == b.minY && b.minX >= a.maxX + 19.999) || b.minY >= a.maxY + 19.999
+    }, "Many windows keep strip order across rows without overlapping")
+    TestRunner.assertTrue(Set(many.map(\.minY)).count > 1, "Many windows wrap into several rows")
+    let fiveWindows = Array(repeating: CGSize(width: 800, height: 600), count: 5)
+    let tooSmall = LayoutEngine.packedGrid(sizes: fiveWindows, in: CGRect(x: 0, y: 0, width: 30, height: 30), gap: 24)
+    TestRunner.assertEqual(tooSmall.count, 5, "Bounds too small for any row still give every window a tile")
+    TestRunner.assertTrue(tooSmall.allSatisfy { $0.width == 0 && $0.height == 0 },
+                          "Bounds too small for any row give zero-size tiles")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: fiveWindows, in: CGRect(x: 0, y: 0, width: 0, height: 500),
+                                                   gap: 24).count,
+                           5, "Zero-width bounds still give every window a tile")
+
+    // 14c. packedGridStep walks packed rows
+    let navTiles = [CGRect(x: 0, y: 0, width: 90, height: 50), CGRect(x: 100, y: 0, width: 90, height: 50),
+                    CGRect(x: 200, y: 0, width: 90, height: 50),
+                    CGRect(x: 50, y: 60, width: 90, height: 50), CGRect(x: 150, y: 60, width: 90, height: 50)]
+    func step(_ from: Int, _ direction: String) -> Int? {
+        LayoutEngine.packedGridStep(frames: navTiles, from: from, direction: direction)
+    }
+    TestRunner.assertEqual(step(2, "right"), 3, "right steps into the next row in order")
+    TestRunner.assertEqual(step(3, "h"), 2, "h steps back into the previous row in order")
+    TestRunner.assertEqual(step(4, "l"), 4, "right at the last tile stays put")
+    TestRunner.assertEqual(step(0, "left"), 0, "left at the first tile stays put")
+    TestRunner.assertEqual(step(2, "down"), 4, "down picks the nearest center in the row below")
+    TestRunner.assertEqual(step(0, "j"), 3, "j picks the nearest center in the row below")
+    TestRunner.assertEqual(step(3, "up"), 0, "up on a tie picks the earlier tile")
+    TestRunner.assertEqual(step(4, "k"), 1, "k picks the nearest center in the row above")
+    TestRunner.assertEqual(step(4, "down"), 4, "down in the bottom row stays put")
+    TestRunner.assertEqual(step(1, "up"), 1, "up in the top row stays put")
+    TestRunner.assertEqual(step(3, "first"), 0, "first jumps to the first tile")
+    TestRunner.assertEqual(step(1, "last"), 4, "last jumps to the last tile")
+    TestRunner.assertEqual(step(1, "sideways"), nil, "unknown direction returns nil")
+    TestRunner.assertEqual(LayoutEngine.packedGridStep(frames: [], from: 0, direction: "down"), 0,
+                           "no tiles stays at zero")
+
     // 15. adjustWidth grow, clamp, and explicit width clearing (C.1)
     var c1Ribbon = Ribbon(columns: [
         ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "A", appName: "App1")], widthRatio: 0.5),
@@ -568,6 +644,45 @@ func runTests() {
                            "The first column at the strip's start stays put")
     TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 400), canvasWidth: 1500, config: Config(panCenterSnap: 0)), 400,
                            "A zero threshold never centers")
+
+    // 21. focus(direction:perRow:) shared by the focus command and the screenshot grid
+    var dirRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 801, pid: 1, title: "0", appName: "App1")]),
+        ColumnModel(windows: [
+            WindowModel(id: 802, pid: 2, title: "1a", appName: "App2"),
+            WindowModel(id: 803, pid: 2, title: "1b", appName: "App2")
+        ]),
+        ColumnModel(windows: [WindowModel(id: 804, pid: 3, title: "2", appName: "App3")]),
+        ColumnModel(windows: [WindowModel(id: 805, pid: 4, title: "3", appName: "App4")]),
+        ColumnModel(windows: [WindowModel(id: 806, pid: 5, title: "4", appName: "App5")])
+    ], activeColumnIndex: 1)
+    TestRunner.assertTrue(dirRibbon.focus(direction: "j", perRow: 3), "j is a known direction")
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "down outside the overview stays in the column")
+    TestRunner.assertEqual(dirRibbon.activeWindow?.id, 803, "down outside the overview moves down the stack")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "up", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeWindow?.id, 802, "up outside the overview moves up the stack")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "l", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 2, "l moves right")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "left", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "left moves left")
+    dirRibbon.isOverview = true
+    TestRunner.assertTrue(dirRibbon.focus(direction: "down", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 4, "down in the overview moves one grid row")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "k", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 1, "k in the overview moves one grid row up")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "last", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 4, "last moves to the last column")
+    TestRunner.assertTrue(dirRibbon.focus(direction: "first", perRow: 3))
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "first moves to the first column")
+    TestRunner.assertFalse(dirRibbon.focus(direction: "sideways", perRow: 3), "unknown direction returns false")
+    TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "unknown direction leaves focus alone")
+
+    // 22. FocusDirection parses the names the focus command and the grid accept
+    TestRunner.assertEqual(["left", "h", "right", "l", "up", "k", "down", "j", "first", "last"].map(FocusDirection.init),
+                           [.left, .left, .right, .right, .up, .up, .down, .down, .first, .last],
+                           "Each direction and its vim alias parse")
+    TestRunner.assertEqual(FocusDirection("sideways"), nil, "An unknown name parses to nil")
+    TestRunner.assertEqual(FocusDirection("H"), nil, "Names are case-sensitive; callers lowercase first")
 
     guard TestRunner.summary() else {
         exit(1)

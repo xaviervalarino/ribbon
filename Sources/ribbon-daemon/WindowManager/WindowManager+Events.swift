@@ -1,12 +1,14 @@
 import Foundation
 import AppKit
 import ApplicationServices
+import Carbon.HIToolbox
 import CoreGraphics
 
 extension WindowManager {
     // MARK: - Space Change Handling
 
     public func handleActiveSpaceDidChange() {
+        screenshotGrid.close()
         guard !isDisplayReconfiguring else { return }
         panController.endPan(snap: false)
 
@@ -236,6 +238,9 @@ extension WindowManager: AXEventObserverDelegate {
             RibbonLog.log("focus event wid=\(id) pid=\(pid) ignored: older than the latest focus request", category: "focus")
             return
         }
+        // A focus the ribbon did not request (a click elsewhere, a new window) leaves the grid
+        // without focusing its selection.
+        closeScreenshotGrid(focusSelection: false)
 
         // A tab switch focuses a hidden tab: it takes over its group's slot, never a new column.
         if isHiddenTab(id) {
@@ -304,6 +309,12 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func applicationActivated(pid: pid_t) {
+        // An activation the ribbon did not cause (Cmd-Tab, a click on another app, an ignored app
+        // included) leaves the grid without focusing its selection.
+        let isEcho = pendingFocusEchoPIDs[pid].map { $0 >= observer.currentEventTime } ?? false
+        if !isEcho {
+            closeScreenshotGrid(focusSelection: false)
+        }
         // Ignored apps never join a ribbon, so their activation has nothing to look up.
         if let name = NSRunningApplication(processIdentifier: pid)?.localizedName,
            config.ignoredApps.contains(name) {
@@ -432,6 +443,31 @@ extension WindowManager: InputTapDelegate {
 
     func pointerMoved(dx: Double) {
         panController.handleMotion(dx: dx)
+    }
+
+    /// Virtual key codes of h/j/k/l and the arrow keys, by grid direction. Key codes name key
+    /// positions, so h/j/k/l keep their places under any keyboard layout.
+    private static let gridKeyDirections: [Int64: String] = [
+        Int64(kVK_ANSI_H): "left", Int64(kVK_LeftArrow): "left",
+        Int64(kVK_ANSI_J): "down", Int64(kVK_DownArrow): "down",
+        Int64(kVK_ANSI_K): "up", Int64(kVK_UpArrow): "up",
+        Int64(kVK_ANSI_L): "right", Int64(kVK_RightArrow): "right",
+    ]
+
+    /// Drives the open grid: Esc closes it, Return or keypad Enter focuses the selection, and
+    /// h/j/k/l and the arrows move it. Other keys do nothing; the tap already swallowed them.
+    func keyDown(keyCode: Int64) {
+        guard screenshotGrid.isOpen else { return }
+        switch keyCode {
+        case Int64(kVK_Escape):
+            closeScreenshotGrid(focusSelection: false)
+        case Int64(kVK_Return), Int64(kVK_ANSI_KeypadEnter):
+            closeScreenshotGrid(focusSelection: true)
+        default:
+            if let direction = Self.gridKeyDirections[keyCode] {
+                _ = screenshotGrid.moveSelection(direction)
+            }
+        }
     }
 
     func setTouchesProbe(_ on: Bool) {

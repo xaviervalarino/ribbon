@@ -1,6 +1,8 @@
 import Foundation
 import AppKit
 import CoreGraphics
+import ImageIO
+import ScreenCaptureKit
 
 /// One-off measurements that need Ribbon.app's Accessibility grant.
 /// Probes run off the main thread and write results to `/tmp/ribbon-debug-<name>.txt`.
@@ -12,8 +14,18 @@ enum DebugProbes {
         let element: AXElement
     }
 
-    static func run(_ args: [String], targets: [Target]) -> String {
+    /// A ribbon window for `capture-probe`: on screen or parked, snapshotted on the main thread.
+    struct CaptureTarget {
+        let id: CGWindowID
+        let app: String
+        let stashed: Bool
+    }
+
+    static func run(_ args: [String], targets: [Target], captureTargets: @autoclosure () -> [CaptureTarget]) -> String {
         switch args.first?.lowercased() {
+        case "capture-probe":
+            let captureTargets = captureTargets()
+            return start("capture-probe", path: CaptureProbe.reportPath) { CaptureProbe.run(captureTargets) }
         case "ax-latency":
             return start("ax-latency") { AXLatencyProbe.run(targets) }
         case "stash-clamp":
@@ -23,12 +35,12 @@ enum DebugProbes {
             }
             return start("stash-clamp") { StashClampProbe.run(target) }
         default:
-            return "error: debug probes: ax-latency, stash-clamp [app]"
+            return "error: debug probes: ax-latency, stash-clamp [app], capture-probe"
         }
     }
 
-    private static func start(_ name: String, _ body: @escaping () -> [String]) -> String {
-        let path = "/tmp/ribbon-debug-\(name).txt"
+    private static func start(_ name: String, path: String? = nil, _ body: @escaping () -> [String]) -> String {
+        let path = path ?? "/tmp/ribbon-debug-\(name).txt"
         try? "running\n".write(toFile: path, atomically: true, encoding: .utf8)
         DispatchQueue.global(qos: .userInitiated).async {
             let lines = body()
@@ -222,4 +234,93 @@ enum AXLatencyProbe {
     }
 
     private static func fmt(_ xs: [Double]) -> String { String(format: "%.2f", DebugProbes.median(xs)) }
+}
+
+/// Captures every window in the active Space's ribbon once, parked windows included, and writes
+/// each image to `/tmp/ribbon-capture-probe/<wid>.png`. Read-only: no window moves, resizes or
+/// takes focus. It answers whether a parked window captures whole, and what one shared
+/// `SCShareableContent` fetch costs against each capture.
+///
+/// Runs off the main thread: the SCK completion handlers are waited on with semaphores.
+enum CaptureProbe {
+    static let directory = "/tmp/ribbon-capture-probe"
+    static let reportPath = directory + "/report.txt"
+    private static let waitSeconds = 5.0
+
+    private final class Box<T> {
+        var value: T?
+    }
+
+    static func run(_ targets: [DebugProbes.CaptureTarget]) -> [String] {
+        let fm = FileManager.default
+        try? fm.createDirectory(atPath: directory, withIntermediateDirectories: true)
+        for name in (try? fm.contentsOfDirectory(atPath: directory)) ?? [] where name.hasSuffix(".png") {
+            try? fm.removeItem(atPath: directory + "/" + name)
+        }
+        var lines = ["capture-probe \(Date()) — \(targets.count) ribbon windows"]
+        guard #available(macOS 14, *) else { return lines + ["requires macOS 14"] }
+
+        let fetchStart = DebugProbes.nowMs()
+        let content = fetch()
+        lines.append("shared SCShareableContent fetch: \(ms(DebugProbes.nowMs() - fetchStart)) ms"
+                     + (content.error.map { " (error: \($0))" } ?? ""))
+        lines.append("wid | app | WindowServer frame | stashed | SCK on screen | requested px | image px | capture ms | result")
+        for t in targets {
+            let frame = DebugProbes.serverBounds(t.id).map { "\(Int($0.minX)),\(Int($0.minY)) \(Int($0.width))x\(Int($0.height))" } ?? "none"
+            let head = "\(t.id) | \(t.app) | \(frame) | \(t.stashed ? "stashed" : "visible")"
+            guard let window = content.windows?.first(where: { $0.windowID == t.id }) else {
+                lines.append("\(head) | - | - | - | - | no SCWindow")
+                continue
+            }
+            let filter = SCContentFilter(desktopIndependentWindow: window)
+            let config = SCStreamConfiguration()
+            config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
+            config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
+            config.showsCursor = false
+            config.ignoreShadowsSingleWindow = true
+            let start = DebugProbes.nowMs()
+            let (image, error) = capture(filter, config)
+            let elapsed = ms(DebugProbes.nowMs() - start)
+            let head2 = "\(head) | \(window.isOnScreen) | \(config.width)x\(config.height)"
+            guard let image else {
+                lines.append("\(head2) | - | \(elapsed) | \(error.map { "error: \($0)" } ?? "no image (timeout \(Int(waitSeconds))s)")")
+                continue
+            }
+            lines.append("\(head2) | \(image.width)x\(image.height) | \(elapsed) | \(writePNG(image, id: t.id) ? "ok" : "png write failed")")
+        }
+        return lines
+    }
+
+    @available(macOS 14, *)
+    private static func fetch() -> (windows: [SCWindow]?, error: Error?) {
+        let done = DispatchSemaphore(value: 0)
+        let result = Box<(windows: [SCWindow]?, error: Error?)>()
+        SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, error in
+            result.value = (content?.windows, error)
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + waitSeconds)
+        return result.value ?? (nil, nil)
+    }
+
+    @available(macOS 14, *)
+    private static func capture(_ filter: SCContentFilter, _ config: SCStreamConfiguration) -> (CGImage?, Error?) {
+        let done = DispatchSemaphore(value: 0)
+        let result = Box<(CGImage?, Error?)>()
+        SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
+            result.value = (image, error)
+            done.signal()
+        }
+        _ = done.wait(timeout: .now() + waitSeconds)
+        return result.value ?? (nil, nil)
+    }
+
+    private static func writePNG(_ image: CGImage, id: CGWindowID) -> Bool {
+        let url = URL(fileURLWithPath: "\(directory)/\(id).png") as CFURL
+        guard let dest = CGImageDestinationCreateWithURL(url, "public.png" as CFString, 1, nil) else { return false }
+        CGImageDestinationAddImage(dest, image, nil)
+        return CGImageDestinationFinalize(dest)
+    }
+
+    private static func ms(_ value: Double) -> String { String(format: "%.0f", value) }
 }

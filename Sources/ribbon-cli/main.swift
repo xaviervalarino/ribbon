@@ -12,9 +12,10 @@ guard !arguments.isEmpty else {
       ribbon shrink <left|right> [step]
       ribbon align <left|center|right>
       ribbon cycle-width (alias: cycle)
-      ribbon toggle-overview (alias: overview)
-      ribbon overview mission-control
-      ribbon mission-control
+      ribbon overview (alias: toggle-overview)
+        opens a grid of window captures; while open, focus moves the selection
+        and overview again focuses it; any other command closes the grid
+      ribbon overview resize
       ribbon focus-display [next|prev|<index>]
       ribbon move-to-display [next|prev|<index>]
       ribbon slurp
@@ -27,6 +28,7 @@ guard !arguments.isEmpty else {
       ribbon restart
       ribbon quit (alias: stop)
       ribbon status
+      ribbon debug capture-probe
     """)
     exit(0)
 }

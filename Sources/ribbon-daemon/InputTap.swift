@@ -10,6 +10,8 @@ protocol InputTapDelegate: AnyObject {
     func pointerMoved(dx: Double)
     func gesture(_ event: CGEvent)
     func swipe(_ event: CGEvent)
+    /// A key press while key monitoring is on; the key never reaches apps.
+    func keyDown(keyCode: Int64)
 }
 
 private let inputTapCallback: CGEventTapCallBack = { _, type, event, userInfo in
@@ -25,6 +27,12 @@ final class InputTap {
     private var loggedUnavailable = false
     private var gestureMonitoring = false
     private var pointerMonitoring = false
+    /// While on, every key press is swallowed and goes to the delegate, and so is the release of
+    /// each swallowed press.
+    private var keyMonitoring = false
+    /// Key codes pressed and swallowed since key monitoring turned on. A key already held when it
+    /// turned on is absent, so its release reaches the app that saw its press.
+    private var swallowedKeys: Set<Int64> = []
     /// While a pan is held the cursor stays where the hold began and mouse motion only pans: each
     /// move warps it back. A warp holds off local mouse events for the suppression interval;
     /// 0.07s is the shortest that still holds the cursor still, and the default 0.25s would stall
@@ -44,6 +52,9 @@ final class InputTap {
         }
         if gestureMonitoring {
             list.append(contentsOf: [gestureEventType, swipeEventType])
+        }
+        if keyMonitoring {
+            list.append(contentsOf: [.keyDown, .keyUp])
         }
         return list
     }
@@ -81,6 +92,13 @@ final class InputTap {
         start()
     }
 
+    func setKeyMonitoring(_ on: Bool) {
+        guard on != keyMonitoring else { return }
+        keyMonitoring = on
+        swallowedKeys.removeAll()
+        start()
+    }
+
     func start() {
         stop()
 
@@ -88,9 +106,9 @@ final class InputTap {
         guard let port = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
             place: .headInsertEventTap,
-            // A held pan swallows scrolls, which needs an active tap; outside a pan the tap only
-            // listens, so input never waits on the main run loop.
-            options: pointerMonitoring ? .defaultTap : .listenOnly,
+            // A held pan swallows scrolls and key monitoring swallows keys, which needs an active
+            // tap; otherwise the tap only listens, so input never waits on the main run loop.
+            options: pointerMonitoring || keyMonitoring ? .defaultTap : .listenOnly,
             eventsOfInterest: mask,
             callback: inputTapCallback,
             userInfo: Unmanaged.passUnretained(self).toOpaque()
@@ -149,6 +167,17 @@ final class InputTap {
             delegate?.gesture(event)
         case swipeEventType:
             delegate?.swipe(event)
+        case .keyDown:
+            guard keyMonitoring else { return true }
+            let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
+            swallowedKeys.insert(keyCode)
+            // After the callback returns, like every key-monitoring change, so a key that closes
+            // the grid never rebuilds the tap from inside its own callback.
+            DispatchQueue.main.async { [weak self] in self?.delegate?.keyDown(keyCode: keyCode) }
+            return false
+        case .keyUp:
+            guard keyMonitoring else { return true }
+            return swallowedKeys.remove(event.getIntegerValueField(.keyboardEventKeycode)) == nil
         default:
             break
         }
