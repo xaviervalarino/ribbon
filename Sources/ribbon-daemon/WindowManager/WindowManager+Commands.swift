@@ -163,22 +163,24 @@ extension WindowManager {
         return width > 0 ? width : nil
     }
 
-    /// Opens the screenshot grid for space `sID` on its display. Cells come from the overview
-    /// layout of a copy of the ribbon, so the real ribbon never enters overview.
+    /// Opens the screenshot grid for space `sID` on its display: one tile per window in strip
+    /// order, packed into rows. The real ribbon never enters overview.
     private func openScreenshotGrid(forSpace sID: SpaceID) {
         guard var copy = ribbons[sID], !copy.columns.isEmpty, let screen = screen(forSpace: sID) else { return }
         let primaryHeight = Double(NSScreen.screens.first?.frame.height ?? 0)
         let visible = QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryHeight)
         let display = QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryHeight)
         copy.isOverview = true
-        let plan = LayoutEngine.computePlan(for: copy, screenFrame: visible, config: config)
         let frames = serverFrames()
-        let thumbnails = plan.placements.map { placement in
-            ScreenshotGrid.Thumbnail(
-                id: placement.windowID,
-                windowFrame: frames[placement.windowID] ?? lastAppliedFrames[placement.windowID] ?? placement.frame,
-                cell: placement.frame
-            )
+        // A window without a known frame has neither a size to lay out nor a frame to zoom from.
+        let windows = copy.columns.flatMap(\.windows).compactMap { window in
+            (frames[window.id] ?? lastAppliedFrames[window.id]).map { (id: window.id, frame: $0) }
+        }
+        let tiles = LayoutEngine.packedGrid(sizes: windows.map(\.frame.size),
+                                            in: visible.cgRect.insetBy(dx: ScreenshotGrid.tileGap, dy: ScreenshotGrid.tileGap),
+                                            gap: ScreenshotGrid.tileGap)
+        let thumbnails = zip(windows, tiles).map { window, tile in
+            ScreenshotGrid.Thumbnail(id: window.id, windowFrame: window.frame, tile: tile)
         }
         screenshotGrid.open(selection: copy, spaceID: sID, thumbnails: thumbnails,
                             screen: screen, displayFrame: display.cgRect)

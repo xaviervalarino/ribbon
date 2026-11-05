@@ -433,14 +433,50 @@ func runTests() {
     navRibbon.focusRowUp(perRow: 3)
     TestRunner.assertEqual(navRibbon.activeColumnIndex, 2, "focusRowUp in the top row stays put")
 
-    // 14b. aspectFit centers the thumbnail inside the cell margin
-    let fitCell = CGRect(x: 100, y: 50, width: 400, height: 400)
-    TestRunner.assertEqual(LayoutEngine.aspectFit(CGSize(width: 800, height: 400), in: fitCell, margin: 20),
-                           CGRect(x: 120, y: 160, width: 360, height: 180), "Wide window fills the inset width, centered vertically")
-    TestRunner.assertEqual(LayoutEngine.aspectFit(CGSize(width: 400, height: 800), in: fitCell, margin: 20),
-                           CGRect(x: 210, y: 70, width: 180, height: 360), "Tall window fills the inset height, centered horizontally")
-    TestRunner.assertEqual(LayoutEngine.aspectFit(.zero, in: fitCell, margin: 20),
-                           CGRect(x: 120, y: 70, width: 360, height: 360), "A size without area takes the inset cell")
+    // 14b. packedGrid lays windows out in justified rows
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [], in: CGRect(x: 0, y: 0, width: 100, height: 100), gap: 10),
+                           [], "No sizes, no tiles")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 800, height: 600)],
+                                                   in: CGRect(x: 0, y: 0, width: 1000, height: 1000), gap: 10),
+                           [CGRect(x: 100, y: 200, width: 800, height: 600)],
+                           "A single small window stays at its own size, centered")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 2000, height: 1000)],
+                                                   in: CGRect(x: 50, y: 50, width: 1000, height: 1000), gap: 10),
+                           [CGRect(x: 50, y: 300, width: 1000, height: 500)],
+                           "A single large window shrinks to the bounds' width, centered vertically")
+    let square = CGSize(width: 1000, height: 1000)
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: Array(repeating: square, count: 4),
+                                                   in: CGRect(x: 0, y: 0, width: 1010, height: 1010), gap: 10),
+                           [CGRect(x: 0, y: 0, width: 500, height: 500), CGRect(x: 510, y: 0, width: 500, height: 500),
+                            CGRect(x: 0, y: 510, width: 500, height: 500), CGRect(x: 510, y: 510, width: 500, height: 500)],
+                           "Four squares in a square take two rows of two")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: Array(repeating: square, count: 2),
+                                                   in: CGRect(x: 0, y: 0, width: 2010, height: 1000), gap: 10),
+                           [CGRect(x: 0, y: 0, width: 1000, height: 1000), CGRect(x: 1010, y: 0, width: 1000, height: 1000)],
+                           "Two squares on a wide display share one row")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: Array(repeating: square, count: 3),
+                                                   in: CGRect(x: 0, y: 0, width: 1010, height: 1010), gap: 10),
+                           [CGRect(x: 0, y: 0, width: 500, height: 500), CGRect(x: 510, y: 0, width: 500, height: 500),
+                            CGRect(x: 255, y: 510, width: 500, height: 500)],
+                           "The fuller row comes first and the shorter row centers")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 1500, height: 1000), CGSize(width: 500, height: 1000)],
+                                                   in: CGRect(x: 0, y: 0, width: 3000, height: 1000), gap: 0),
+                           [CGRect(x: 500, y: 0, width: 1500, height: 1000), CGRect(x: 2000, y: 0, width: 500, height: 1000)],
+                           "Tiles in a row share its height and keep their own aspect")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: [CGSize(width: 1000, height: 500), square],
+                                                   in: CGRect(x: 0, y: 0, width: 10000, height: 10000), gap: 0).map(\.size),
+                           [CGSize(width: 1000, height: 500), square],
+                           "No tile grows past its window's size")
+    let manyBounds = CGRect(x: 0, y: 0, width: 1512, height: 900)
+    let many = LayoutEngine.packedGrid(sizes: (0..<13).map { CGSize(width: 1200 + $0 * 30, height: 900) },
+                                       in: manyBounds, gap: 20)
+    TestRunner.assertEqual(many.count, 13, "Many windows each get a tile")
+    TestRunner.assertTrue(many.allSatisfy { manyBounds.insetBy(dx: -0.001, dy: -0.001).contains($0) },
+                          "Many windows fit the bounds")
+    TestRunner.assertTrue(zip(many, many.dropFirst()).allSatisfy { a, b in
+        (a.minY == b.minY && b.minX >= a.maxX + 19.999) || b.minY >= a.maxY + 19.999
+    }, "Many windows keep strip order across rows without overlapping")
+    TestRunner.assertTrue(Set(many.map(\.minY)).count > 1, "Many windows wrap into several rows")
 
     // 15. adjustWidth grow, clamp, and explicit width clearing (C.1)
     var c1Ribbon = Ribbon(columns: [

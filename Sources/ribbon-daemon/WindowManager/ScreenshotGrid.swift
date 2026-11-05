@@ -15,11 +15,12 @@ final class ScreenshotGrid {
         let id: CGWindowID
         /// The window's frame on screen now, in Quartz coordinates.
         let windowFrame: CGRect
-        /// The grid cell the thumbnail is fitted into, in Quartz coordinates.
-        let cell: CGRect
+        /// The thumbnail's frame in the grid, in Quartz coordinates, at the window's aspect ratio.
+        let tile: CGRect
     }
 
-    static let cellMargin = 12.0
+    /// Separates tiles from each other and from the display's visible edges.
+    static let tileGap = 24.0
     static let zoomSeconds = 0.2
 
     /// Runs on a click in the grid with the clicked thumbnail's window, or nil for the backdrop.
@@ -58,7 +59,7 @@ final class ScreenshotGrid {
     }
 
     /// Shows `thumbnails` on `screen`, whose Quartz frame is `displayFrame`, with `selection`'s
-    /// active window ringed, zooming each from its window's frame into its cell, and captures
+    /// active window ringed, zooming each from its window's frame into its tile, and captures
     /// every window at its thumbnail's pixel size.
     func open(selection: Ribbon, spaceID: WindowManager.SpaceID, thumbnails: [Thumbnail],
               screen: NSScreen, displayFrame: CGRect) {
@@ -78,16 +79,15 @@ final class ScreenshotGrid {
         CATransaction.setDisableActions(true)
         backdrop.frame = CGRect(origin: .zero, size: screen.frame.size)
         for thumb in thumbnails {
-            let frame = LayoutEngine.aspectFit(thumb.windowFrame.size, in: thumb.cell, margin: Self.cellMargin)
             let layer = Self.makeThumbnailLayer()
             layer.frame = local(thumb.windowFrame)
             layer.contents = cache[thumb.id]
             root.addSublayer(layer)
             layers[thumb.id] = layer
             homeFrames[thumb.id] = layer.frame
-            gridFrames[thumb.id] = local(frame)
-            pixelSizes[thumb.id] = CGSize(width: frame.width * screen.backingScaleFactor,
-                                          height: frame.height * screen.backingScaleFactor)
+            gridFrames[thumb.id] = local(thumb.tile)
+            pixelSizes[thumb.id] = CGSize(width: thumb.tile.width * screen.backingScaleFactor,
+                                          height: thumb.tile.height * screen.backingScaleFactor)
         }
         root.addSublayer(ring)
         ring.opacity = 0
