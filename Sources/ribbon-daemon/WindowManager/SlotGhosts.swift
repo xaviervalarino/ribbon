@@ -4,8 +4,9 @@ import ScreenCaptureKit
 /// Blocks drawn where a window belongs while its app is too slow to show it there, so a slide
 /// never leaves an empty slot. A block shows an image of its window, captured when the ghost first
 /// shows, once Screen Recording is granted; until then it is a plain fill. A block cut at a display
-/// edge runs past it, so it reads as the window overflowing. The panels sit one level below normal windows, so they show
-/// only through gaps; window discovery admits layer 0 only, so they are never tiled.
+/// edge runs past it, so it reads as the window overflowing. The panels sit one level below normal
+/// windows, so they show only through gaps; window discovery admits layer 0 only, so they are never
+/// tiled.
 ///
 /// Confined to the main queue.
 final class SlotGhosts {
@@ -36,15 +37,15 @@ final class SlotGhosts {
         let window = window ?? frame
         if let block = Self.block(of: panel), window.width > 0, window.height > 0 {
             // Each side where the window continues past `frame` overflows the panel.
-            let left = min(Self.overflow, frame.minX - window.minX)
-            let right = min(Self.overflow, window.maxX - frame.maxX)
-            let top = min(Self.overflow, frame.minY - window.minY)
-            let bottom = min(Self.overflow, window.maxY - frame.maxY)
-            let shown = CGRect(x: frame.minX - max(0, left), y: frame.minY - max(0, top),
-                               width: frame.width + max(0, left) + max(0, right),
-                               height: frame.height + max(0, top) + max(0, bottom))
+            let reach = { (beyond: CGFloat) in max(0, min(Self.overflow, beyond)) }
+            let left = reach(frame.minX - window.minX)
+            let right = reach(window.maxX - frame.maxX)
+            let top = reach(frame.minY - window.minY)
+            let bottom = reach(window.maxY - frame.maxY)
+            let shown = CGRect(x: frame.minX - left, y: frame.minY - top,
+                               width: frame.width + left + right, height: frame.height + top + bottom)
             // Cocoa view coordinates: y grows upward, so the bottom overflow sits below zero.
-            block.frame = CGRect(x: -max(0, left), y: -max(0, bottom), width: shown.width, height: shown.height)
+            block.frame = CGRect(x: -left, y: -bottom, width: shown.width, height: shown.height)
             block.layer?.contents = Self.snapshots[id]
             block.layer?.contentsRect = CGRect(x: (shown.minX - window.minX) / window.width,
                                                y: (window.maxY - shown.maxY) / window.height,
@@ -64,10 +65,13 @@ final class SlotGhosts {
 
     /// Fades the ghosts of `ids` out. A fading panel is reused only after its fade completes.
     func hide(_ ids: [CGWindowID]) {
-        let hidden = ids.filter { panels[$0] != nil }
-        let fading = hidden.compactMap { panels.removeValue(forKey: $0) }
+        var fading: [NSPanel] = []
+        for id in ids {
+            guard let panel = panels.removeValue(forKey: id) else { continue }
+            Self.release(id)
+            fading.append(panel)
+        }
         guard !fading.isEmpty else { return }
-        hidden.forEach(Self.release)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
             for panel in fading { panel.animator().alphaValue = 0 }
