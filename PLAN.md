@@ -51,6 +51,21 @@ Replaces the resize-based overview: an overlay shows window captures in a Missio
 - **Captures keep about twice the grid cell's pixel size**: a few MB per window, sharp in the grid, slightly soft at the start of the zoom. Upgrade path: full resolution (~15–20MB per Retina window) if the zoom looks soft.
 - **Adopted defaults (round 5):** Ctrl+M again closes like Esc; a Space or display change closes the grid; stacked columns split their cell as the resize overview does; the key tap lives only while the grid is up and dies with the daemon.
 - **Unverified, probe first:** whether a desktop-independent-window capture of a parked window (1pt sliver on screen) returns the whole window. `SLSHWCaptureWindowList` returns only the on-screen clip.
+- **Ponytail ultra fold (2026-11-04)** narrows the build:
+  - The cache is the last capture per window, taken when the grid opens and shown at once on the next open; no focus-loss or slide-settle triggers. The first open shows placeholder blocks until captures land. Background refresh returns only if the parked-window probe fails.
+  - One `SCShareableContent` fetch per open, shared by every capture (each ghost capture refetches today, `SlotGhosts.swift:59`).
+  - Captures request the grid cell's pixel size (`config.width/height`); no separate resolution policy.
+  - Hover highlight is cut.
+  - Cell frames come from `LayoutEngine.computePlan` on a copy of the ribbon with `isOverview = true`, so stacked columns split their cell as today. The real ribbon never enters overview for the grid, and grid `focus` commands move the highlight without retiling.
+  - The key-grab tap is the last step, built on `m2/integration` (the input tap lives on `m2/gestures`); until then Caps+W+hjkl moves the highlight and Caps+W+M toggles.
+  - The resize overview stays reachable as `overview resize`, its code untouched. `overview mission-control` and `mission-control` are removed.
+
+**Build sequence (m2/screenshot-grid unless noted):**
+0. Probe: `debug capture-probe` in `DebugProbes.swift` captures every strip window once, writes each image to `/tmp/ribbon-capture-probe/<wid>.png` with window size, image size, parked state and timings (one shared fetch vs each capture). Read-only; the user restarts and runs it.
+1. Static grid: new `WindowManager/ScreenshotGrid.swift` (one overlay panel per active display, a layer per window, aspect-fit in its cell with a margin, selection ring); `WindowManager+Commands.swift` routes `overview` to the grid, `focus` moves its selection, any other command closes it (`overview` again focuses the selection, Esc path later).
+2. Zoom in and out from each window's frame (`NSAnimationContext`), `ScreenshotGrid.swift` only.
+3. Click focuses and closes; a Space or display change closes. `ScreenshotGrid.swift`, `WindowManager.swift`.
+4. Key-grab tap on `m2/integration`: `InputTap.swift` keyDown mask while the grid is open; hjkl/arrows/Enter/Esc drive it, other keys are swallowed.
 
 ### Known macOS constraints (verified 2026-09)
 - `kAXHiddenAttribute` is app-level only — not settable on window elements (silently fails).
