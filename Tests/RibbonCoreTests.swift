@@ -263,6 +263,25 @@ func runTests() {
     TestRunner.assertEqual(LayoutEngine.rowHeights(minimums: [30, 30, 30], usable: 900), [300, 300, 300], "Rows split evenly without minimums")
     TestRunner.assertEqual(LayoutEngine.rowHeights(minimums: [500, 500], usable: 900), [500, 500], "Minimums that do not fit overflow")
 
+    // 9b. Columns widen to a window's minimum width and push later columns right
+    var wideMin = WindowModel(id: 311, pid: 1, title: "Wide", appName: "App1")
+    wideMin.minWidth = 900
+    let minWidthRibbon = Ribbon(columns: [
+        ColumnModel(windows: [WindowModel(id: 310, pid: 1, title: "Plain", appName: "App1")], widthRatio: 0.5),
+        ColumnModel(windows: [wideMin], widthRatio: 0.5),
+        ColumnModel(windows: [WindowModel(id: 312, pid: 2, title: "Next", appName: "App2")], widthRatio: 0.5)
+    ])
+    let minWidthGeometry = LayoutEngine.columnGeometry(for: minWidthRibbon, canvasWidth: 1500, config: config)
+    TestRunner.assertEqual(minWidthGeometry[1].width, 900.0, "Column keeps its window's minimum width")
+    TestRunner.assertEqual(minWidthGeometry[2].x, minWidthGeometry[1].x + 900 + config.windowGap, "Next column starts after the minimum width")
+    TestRunner.assertTrue(minWidthGeometry[0].width < 900, "Columns without a minimum keep their ratio width")
+    TestRunner.assertEqual(LayoutEngine.columnGeometry(for: minWidthRibbon, canvasWidth: 600, config: config)[1].width, 600.0,
+                           "A minimum wider than the canvas caps at the canvas")
+    var raised = minWidthRibbon
+    TestRunner.assertTrue(raised.raiseMinSize(width: 950, height: nil, forWindowID: 311), "A wider minimum raises it")
+    TestRunner.assertFalse(raised.raiseMinSize(width: 800, height: nil, forWindowID: 311), "A narrower minimum is ignored")
+    TestRunner.assertEqual(raised.columns[1].minWidth, 950.0, "Column reports its window's minimum width")
+
     // 10. Slurp keeps focus on the current window
     var slurpRibbon = Ribbon(columns: [
         ColumnModel(windows: [WindowModel(id: 401, pid: 1, title: "Current", appName: "App1")]),
