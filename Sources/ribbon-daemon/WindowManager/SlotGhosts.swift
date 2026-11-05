@@ -133,6 +133,7 @@ final class SlotGhosts {
             let ids = toWarm.filter { snapshots[$0] == nil }
             toWarm = []
             guard #available(macOS 14, *), !ids.isEmpty else { return }
+            RibbonLog.log("ghost warm \(ids.count) windows", category: "slide")
             SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, _ in
                 for window in content?.windows ?? [] where ids.contains(window.windowID) {
                     let filter = SCContentFilter(desktopIndependentWindow: window)
