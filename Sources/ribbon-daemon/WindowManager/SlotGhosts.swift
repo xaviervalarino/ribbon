@@ -20,11 +20,14 @@ final class SlotGhosts {
     /// Window images shared by every `SlotGhosts`, so a window handed between the slide ghosts and
     /// the seam ghosts keeps its image instead of showing the plain fill while it is captured again.
     private static var snapshots: [CGWindowID: CGImage] = [:]
-    /// Ghosts showing each window, across every `SlotGhosts`. A window's image is dropped
-    /// `snapshotGrace` after its last ghost hides: a full-size capture runs to tens of MB.
+    /// Ghosts showing each window, across every `SlotGhosts`. `snapshotGrace` after a window's
+    /// last ghost hides, its image shrinks to a quarter-size copy (a full-size capture runs to tens
+    /// of MB), kept until `forget` so its next ghost never starts empty.
     private static var users: [CGWindowID: Int] = [:]
-    /// Counts each window's last-ghost releases, so only the newest grace timer drops its image.
+    /// Counts each window's last-ghost releases, so only the newest grace timer shrinks its image.
     private static var releases: [CGWindowID: Int] = [:]
+    /// Windows whose image is the shrunken copy, which never shrinks again.
+    private static var shrunk: Set<CGWindowID> = []
     private static let snapshotGrace: DispatchTimeInterval = .seconds(3)
     /// How far a block runs past an edge where its window continues, so the panel clips the
     /// block's corners and border there; above the block's 10pt corner radius.
@@ -103,9 +106,38 @@ final class SlotGhosts {
         releases[id] = release
         DispatchQueue.main.asyncAfter(deadline: .now() + snapshotGrace) {
             guard users[id] == nil, releases[id] == release else { return }
-            snapshots[id] = nil
             releases[id] = nil
+            guard let image = snapshots[id], !shrunk.contains(id) else { return }
+            DispatchQueue.global(qos: .utility).async {
+                let small = quarterSize(image)
+                DispatchQueue.main.async {
+                    // A capture that landed meanwhile is newer.
+                    guard snapshots[id] === image else { return }
+                    snapshots[id] = small
+                    shrunk.insert(id)
+                }
+            }
         }
+    }
+
+    /// Drops `id`'s image; call once its window is gone.
+    static func forget(_ id: CGWindowID) {
+        snapshots[id] = nil
+        releases[id] = nil
+        shrunk.remove(id)
+    }
+
+    private static func quarterSize(_ image: CGImage) -> CGImage? {
+        let width = max(1, image.width / 4)
+        let height = max(1, image.height / 4)
+        guard let space = image.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8,
+                                      bytesPerRow: 0, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                          | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return context.makeImage()
     }
 
     /// Captures `id`'s window into its ghost. Fails, leaving the plain fill, until Screen Recording
@@ -135,7 +167,10 @@ final class SlotGhosts {
             let ms = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
             RibbonLog.log("ghost capture wid=\(id) \(image == nil ? "failed \(error.map { "\($0)" } ?? "no window")" : "ok") \(ms)ms",
                           category: "slide")
-            if let image, Self.users[id] != nil { Self.snapshots[id] = image }
+            if let image, Self.users[id] != nil {
+                Self.snapshots[id] = image
+                Self.shrunk.remove(id)
+            }
             guard let panel = self.panels[id] else { return }
             if let image { Self.block(of: panel)?.layer?.contents = image }
             // A failed capture (no Screen Recording grant) fades in the plain fill.
