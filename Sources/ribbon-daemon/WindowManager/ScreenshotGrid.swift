@@ -52,6 +52,10 @@ final class ScreenshotGrid {
     /// The wallpaper the open grid shows; a load that lands for any other is only cached.
     private var shownWallpaper: (display: CGDirectDisplayID, url: URL)?
     private let ring = CALayer()
+    private static let thumbnailCornerRadius: CGFloat = 6
+    private static let ringWidth: CGFloat = 5
+    /// The ring's outer edge sits this far outside the thumbnail, leaving a 3pt gap inside it.
+    private static let ringOutset: CGFloat = ringWidth + 3
     private var layers: [CGWindowID: CALayer] = [:]
     /// Each thumbnail's window frame in panel coordinates: where it zooms in from and out to.
     private var homeFrames: [CGWindowID: CGRect] = [:]
@@ -73,8 +77,9 @@ final class ScreenshotGrid {
         backdrop.addSublayer(dim)
         root.addSublayer(backdrop)
         ring.borderColor = NSColor.controlAccentColor.cgColor
-        ring.borderWidth = 3
-        ring.cornerRadius = 9
+        ring.borderWidth = Self.ringWidth
+        // Concentric with the thumbnail's corner.
+        ring.cornerRadius = Self.thumbnailCornerRadius + Self.ringOutset
     }
 
     /// Shows `thumbnails` on `screen`, whose Quartz frame is `displayFrame`, with `selectedID`
@@ -246,7 +251,7 @@ final class ScreenshotGrid {
         }
         ring.isHidden = false
         // A layer mid-zoom reports its target frame, which is where the ring belongs.
-        ring.frame = layer.frame.insetBy(dx: -4, dy: -4)
+        ring.frame = layer.frame.insetBy(dx: -Self.ringOutset, dy: -Self.ringOutset)
     }
 
     private static func animate(_ changes: () -> Void, completion: (() -> Void)? = nil) {
@@ -307,7 +312,7 @@ final class ScreenshotGrid {
     private static func makeThumbnailLayer() -> CALayer {
         let layer = CALayer()
         layer.backgroundColor = NSColor(white: 1, alpha: 0.12).cgColor
-        layer.cornerRadius = 6
+        layer.cornerRadius = thumbnailCornerRadius
         layer.masksToBounds = true
         layer.contentsGravity = .resizeAspect
         return layer
