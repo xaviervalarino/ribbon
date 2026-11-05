@@ -21,6 +21,8 @@ import QuartzCore
 ///   rapid presses read as one continuous glide instead of a stop and restart per press.
 /// - Each app is sent the position it should show when its step lands (its measured step
 ///   round trip ahead), so a busy app lands in line with its neighbors instead of trailing them.
+/// - A window whose app sits on a step past `ghostLagMs` gets a ghost block in its slot until the
+///   app's final mutations are applied, so a slow app never leaves the strip looking empty.
 ///
 /// Confined to the main queue: the display link, `animate`, and step completions all run there.
 final class ScrollAnimator: @unchecked Sendable {
@@ -39,6 +41,8 @@ final class ScrollAnimator: @unchecked Sendable {
         let stash: CGPoint
         /// The strip origin x past which half the window lies beyond the shared edge.
         let limitX: CGFloat
+        /// The shared display edge.
+        let edgeX: CGFloat
     }
 
     struct Slide {
@@ -82,6 +86,8 @@ final class ScrollAnimator: @unchecked Sendable {
     private static let stalledCheckMs = 50.0
     /// Wait before a link that looks silent is dropped.
     private static let confirmSilentMs = 20
+    /// How long an app may sit on a slide step before its windows' slots are ghosted.
+    private static let ghostLagMs = 30.0
 
     private let driverFor: (pid_t) -> AppDriver
     /// Runs when a slide finishes and no further slide is pending.
@@ -90,6 +96,12 @@ final class ScrollAnimator: @unchecked Sendable {
     var onNextIdle: (() -> Void)?
     /// Runs when a held focus is sent, so its echoes are judged from then.
     var onSettledFocus: ((CGWindowID, pid_t) -> Void)?
+    private let ghosts = SlotGhosts()
+    private var ghosted: Set<CGWindowID> = []
+    /// Windows shown at a far-side stash whose strip slot by the shared edge holds a ghost.
+    private var seamGhosted: Set<CGWindowID> = []
+    /// Ghosts held at their window's final frame until the app's finals drain.
+    private var ghostsAwaitingFinals: [pid_t: [CGWindowID]] = [:]
 
     private var tracks: [CGWindowID: Track] = [:]
     private var startMs: Double = 0
@@ -204,6 +216,10 @@ final class ScrollAnimator: @unchecked Sendable {
             tracks.removeValue(forKey: id)
             landingWatches.removeValue(forKey: id)
         }
+        let cancelledGhosts = ghosted.union(seamGhosted).intersection(windowIDs)
+        ghosted.subtract(cancelledGhosts)
+        seamGhosted.subtract(cancelledGhosts)
+        ghosts.hide(Array(cancelledGhosts))
         if let focus = settledFocus, windowIDs.contains(focus.mutation.windowID) {
             settledFocus = nil
             if let focusOnly = focus.mutation.focusOnly {
@@ -331,6 +347,7 @@ final class ScrollAnimator: @unchecked Sendable {
 
         checkLandings(at: now)
         sendSteps(at: now)
+        showGhosts(at: now)
         if progress(at: now) >= 1 {
             finish()
         }
@@ -352,6 +369,33 @@ final class ScrollAnimator: @unchecked Sendable {
                 return AppDriver.SlideStep(element: track.element, windowID: id, origin: origin)
             }
             send(steps, to: pid)
+        }
+    }
+
+    /// Ghosts the slot of each window whose app has sat on its step past the lag; a ghosted window
+    /// keeps its ghost until the slide ends, so steps landing between lags do not flicker it.
+    private func showGhosts(at nowMs: Double) {
+        let p = progress(at: nowMs)
+        for (id, track) in tracks {
+            // A window that ends parked has its slot ghosted by the retile instead.
+            let natural = Self.natural(track, progress: p, durationMs: durationMs)
+            if Self.seamPart(track, natural: track.toNatural) == nil, let seam = Self.seamPart(track, natural: natural) {
+                ghosts.show(id, frame: seam, window: CGRect(origin: natural, size: track.final.frame.size))
+                seamGhosted.insert(id)
+                continue
+            }
+            if seamGhosted.remove(id) != nil, !ghosted.contains(id) { ghosts.hide([id]) }
+            let stepLagging = sentAtMs[track.pid].map { nowMs - $0 >= Self.ghostLagMs } ?? false
+            // A joining window WindowServer has not shown moved yet, which includes the app's redraw.
+            let unseen = landingWatches[id].map { watch in
+                watch.joining && (watch.sentMs.map { nowMs - $0 >= Self.ghostLagMs } ?? false)
+            } ?? false
+            guard stepLagging || unseen || ghosted.contains(id) else { continue }
+            if ghosted.insert(id).inserted {
+                RibbonLog.log("ghost wid=\(id) pid=\(track.pid) \(unseen ? "unseen" : "step lag")", category: "slide")
+            }
+            let origin = Self.shown(track, progress: p, durationMs: durationMs)
+            ghosts.show(id, frame: CGRect(origin: origin, size: track.final.frame.size))
         }
     }
 
@@ -405,6 +449,14 @@ final class ScrollAnimator: @unchecked Sendable {
             logLanding(id: id, watch, result: "none by slide end (\(Int(now - sentMs))ms) stepInFlight=\(inFlight)")
         }
         landingWatches.removeAll()
+        for id in ghosted {
+            guard let track = tracks[id] else { continue }
+            ghosts.show(id, frame: track.final.frame)
+            ghostsAwaitingFinals[track.pid, default: []].append(id)
+        }
+        ghosted.removeAll()
+        ghosts.hide(Array(seamGhosted.subtracting(ghostsAwaitingFinals.values.joined())))
+        seamGhosted.removeAll()
         var finalsByPID: [pid_t: [AppDriver.WindowMutation]] = [:]
         for track in tracks.values {
             finalsByPID[track.pid, default: []].append(track.final)
@@ -438,7 +490,12 @@ final class ScrollAnimator: @unchecked Sendable {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.finalsDraining[pid, default: 1] -= 1
-                if self.finalsDraining[pid] == 0 { self.finalsDraining.removeValue(forKey: pid) }
+                if self.finalsDraining[pid] == 0 {
+                    self.finalsDraining.removeValue(forKey: pid)
+                    // A window a newer slide ghosts again keeps its ghost.
+                    let held = self.ghostsAwaitingFinals.removeValue(forKey: pid) ?? []
+                    self.ghosts.hide(held.filter { !self.ghosted.contains($0) })
+                }
             }
         }
     }
@@ -527,6 +584,19 @@ final class ScrollAnimator: @unchecked Sendable {
     /// True when the track starts held at a stash sliver rather than at its strip position.
     private static func isPinnedAtStart(_ track: Track) -> Bool {
         abs(shown(track, progress: 0, durationMs: 0).x - track.fromNatural.x.rounded()) > 1
+    }
+
+    /// The part of a window's strip frame on its own display while it shows at a far-side stash
+    /// past a shared edge, or nil when it shows at its strip position.
+    private static func seamPart(_ track: Track, natural: CGPoint) -> CGRect? {
+        let frame = CGRect(origin: natural, size: track.final.frame.size)
+        if let swap = track.parking.aboveMaxX, natural.x > swap.limitX, swap.edgeX > frame.minX {
+            return CGRect(x: frame.minX, y: frame.minY, width: swap.edgeX - frame.minX, height: frame.height)
+        }
+        if let swap = track.parking.belowMinX, natural.x < swap.limitX, frame.maxX > swap.edgeX {
+            return CGRect(x: swap.edgeX, y: frame.minY, width: frame.maxX - swap.edgeX, height: frame.height)
+        }
+        return nil
     }
 
     /// The strip position pinned at the window's stash slivers, or its top/bottom stash past a shared edge.

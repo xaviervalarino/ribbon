@@ -126,6 +126,8 @@ extension WindowManager {
         var framesToApply: [(id: CGWindowID, pid: pid_t, frame: CGRect, isStashed: Bool)] = []
         var naturalFrames: [CGWindowID: CGRect] = [:]
         var displayFrames: [CGWindowID: CGRect] = [:]
+        var seamFrames: [CGWindowID: CGRect] = [:]
+        let activeSpace = currentActiveSpaceID()
 
         let allDisplayBounds: [DisplayBounds] = NSScreen.screens.map { s in
             let full = QuartzGeometry.toQuartzRect(cocoaFrame: s.frame, primaryScreenHeight: primaryScreenHeight)
@@ -174,8 +176,14 @@ extension WindowManager {
                 framesToApply.append((id: placement.windowID, pid: pid, frame: placement.frame, isStashed: placement.isStashed))
                 naturalFrames[placement.windowID] = placement.naturalFrame
                 displayFrames[placement.windowID] = screenFullQuartzFrame.cgRect
+                // A column parked past a shared display edge leaves its slot by the seam empty.
+                let onDisplay = placement.naturalFrame.intersection(screenQuartzFrame.cgRect)
+                if sID == activeSpace, placement.isStashed, onDisplay.width >= 20 {
+                    seamFrames[placement.windowID] = onDisplay
+                }
             }
         }
+        seamGhosts.sync(seamFrames, windows: naturalFrames)
 
         applyFrames(framesToApply, naturalFrames: naturalFrames, displayFrames: displayFrames,
                     focusWindowID: focusWindowID, animated: animated, quiet: quiet)
@@ -376,9 +384,9 @@ extension WindowManager {
                 guard let display else { return }
                 let half = parked.width / 2
                 if natural.x < display.minX {
-                    parking.belowMinX = .init(stash: parked.origin, limitX: display.minX - half)
+                    parking.belowMinX = .init(stash: parked.origin, limitX: display.minX - half, edgeX: display.minX)
                 } else if natural.x > display.maxX - parked.width {
-                    parking.aboveMaxX = .init(stash: parked.origin, limitX: display.maxX - half)
+                    parking.aboveMaxX = .init(stash: parked.origin, limitX: display.maxX - half, edgeX: display.maxX)
                 }
                 return
             }
