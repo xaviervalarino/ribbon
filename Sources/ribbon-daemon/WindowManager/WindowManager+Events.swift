@@ -139,15 +139,22 @@ extension WindowManager: AXEventObserverDelegate {
         let canvasW = screen.visibleFrame.width - (config.edgeMargin * 2)
         guard canvasW > 0 else { return }
 
+        // A resize with the mouse held is the user's; any other is an app adjusting itself.
+        let byHand = CGEventSource.buttonState(.combinedSessionState, button: .left)
         resizeDebounceWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.resizeDebounceWork = nil
             guard let newSize = self.serverFrame(id)?.size else { return }
-            if let last = self.lastAppliedFrames[id], abs(last.size.width - newSize.width) < 2.0 {
+            // Apps settle a few points off the width they are given (terminals round to a cell,
+            // UTM to its display); adopting that as a manual resize starts a resize loop.
+            let slack: CGFloat = byHand ? 2 : 16
+            if let last = self.lastAppliedFrames[id], abs(last.size.width - newSize.width) < slack {
                 return
             }
-            let ratio = max(0.15, min(1.0, Double(newSize.width) / Double(canvasW)))
+            // The inverse of columnGeometry's width: ratio × (canvas + gap) − gap.
+            let gap = self.config.windowGap
+            let ratio = max(0.15, min(1.0, (Double(newSize.width) + gap) / (Double(canvasW) + gap)))
             if var r = self.ribbons[sID] {
                 if r.setWidthRatio(ratio, forWindowID: id) {
                     let applied = self.lastAppliedFrames[id].map { "\(Int($0.width))" } ?? "none"
