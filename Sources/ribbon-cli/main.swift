@@ -7,6 +7,7 @@ guard !arguments.isEmpty else {
 
     Usage:
       ribbon focus <left|right|up|down|first|last>
+      ribbon step <left|right>   (focus, but prints "edge" when focus cannot move)
       ribbon swap <left|right|up|down|first|last> (alias: move)
       ribbon grow <left|right> [step]
       ribbon shrink <left|right> [step]

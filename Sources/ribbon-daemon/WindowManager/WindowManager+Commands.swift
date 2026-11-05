@@ -178,6 +178,7 @@ extension WindowManager {
         // command's activation is in flight. Clicks reach the ribbon as focus events.
         let sID = currentActiveSpaceID()
         var openMissionControlAfterRetile = false
+        var atEdge = false
 
         let parts = command.split(separator: " ").map(String.init)
         guard let action = parts.first?.lowercased() else { return "error: empty command" }
@@ -211,6 +212,14 @@ extension WindowManager {
             case "last": ribbon.focusLast()
             default: return "error: unknown focus direction"
             }
+        case "step":
+            // `focus left|right` that replies `edge` when focus cannot move, so a swipe can hand off
+            // to a Space switcher. An empty ribbon is an edge; overview never is.
+            let dir = parts.dropFirst().first?.lowercased()
+            guard dir == "left" || dir == "right" else { return "error: step left|right" }
+            let before = ribbon.activeColumnIndex
+            if dir == "left" { ribbon.focusLeft() } else { ribbon.focusRight() }
+            atEdge = !ribbon.isOverview && ribbon.activeColumnIndex == before
         case "swap", "move":
             ribbon.isOverview = false
             let dir = parts.dropFirst().first?.lowercased() ?? "right"
@@ -359,6 +368,6 @@ extension WindowManager {
             }
         }
 
-        return "ok"
+        return atEdge ? "edge" : "ok"
     }
 }
