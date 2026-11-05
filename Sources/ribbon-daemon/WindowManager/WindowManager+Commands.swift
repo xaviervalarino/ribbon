@@ -70,6 +70,15 @@ extension WindowManager {
         }
     }
 
+    /// Every window in the active Space's ribbon, parked ones included, for `debug capture-probe`.
+    private func debugCaptureTargets() -> [DebugProbes.CaptureTarget] {
+        let windows = ribbons[currentActiveSpaceID()]?.columns.flatMap(\.windows) ?? []
+        return windows.map { win in
+            let app = NSRunningApplication(processIdentifier: win.pid)?.localizedName ?? "pid \(win.pid)"
+            return DebugProbes.CaptureTarget(id: win.id, app: app, stashed: lastStashedState[win.id] == true)
+        }
+    }
+
     /// Tracking state and what AX returns per app, to locate where discovery drops windows.
     private func debugStateDump() -> String {
         let topology = SpaceManager.currentTopology()
@@ -172,7 +181,7 @@ extension WindowManager {
             default:
                 break
             }
-            return DebugProbes.run(command.split(separator: " ").dropFirst().map(String.init), targets: debugProbeTargets())
+            return DebugProbes.run(command.split(separator: " ").dropFirst().map(String.init), targets: debugProbeTargets(), captureTargets: debugCaptureTargets())
         }
         // Commands act on the ribbon's own active column: macOS focus lags while the previous
         // command's activation is in flight. Clicks reach the ribbon as focus events.
