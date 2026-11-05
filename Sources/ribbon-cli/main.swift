@@ -104,17 +104,22 @@ payload.withCString { cstr in
 var tv = timeval(tv_sec: 2, tv_usec: 0)
 setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
 
-var buffer = [CChar](repeating: 0, count: 1024)
-let bytesRead = read(clientFD, &buffer, buffer.count - 1)
+// The daemon closes the connection after its reply, so read until EOF.
+var reply: [UInt8] = []
+var chunk = [UInt8](repeating: 0, count: 4096)
+while true {
+    let bytesRead = read(clientFD, &chunk, chunk.count)
+    guard bytesRead > 0 else { break }
+    reply.append(contentsOf: chunk[0..<bytesRead])
+}
 close(clientFD)
 
-if bytesRead <= 0 {
+if reply.isEmpty {
     fputs("error: timed out waiting for daemon response\n", stderr)
     exit(1)
 }
 
-buffer[bytesRead] = 0
-let response = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+let response = String(decoding: reply, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
 if response.hasPrefix("error") {
     fputs("\(response)\n", stderr)
     exit(1)

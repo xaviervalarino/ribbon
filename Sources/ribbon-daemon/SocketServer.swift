@@ -162,8 +162,13 @@ public final class SocketServer {
                 let started = DispatchTime.now()
                 let response = (self?.onCommand?(command) ?? "ok") + "\n"
                 AXEventObserver.logIfSlow("command '\(command)'", pid: getpid(), since: started)
-                response.withCString { cstr in
-                    _ = write(clientFD, cstr, strlen(cstr))
+                // A reply larger than the socket buffer takes several writes.
+                let bytes = Array(response.utf8)
+                var sent = 0
+                while sent < bytes.count {
+                    let n = bytes[sent...].withUnsafeBufferPointer { write(clientFD, $0.baseAddress, $0.count) }
+                    guard n > 0 else { break }
+                    sent += n
                 }
             }
             clientSource?.cancel()
