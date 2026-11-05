@@ -20,16 +20,17 @@ final class ScreenshotGrid {
     }
 
     static let cellMargin = 12.0
+    static let zoomSeconds = 0.2
 
-    /// Runs when a thumbnail is clicked, after its window became the selection.
-    var onClick: ((CGWindowID) -> Void)?
+    /// Runs on a click in the grid with the clicked thumbnail's window, or nil for the backdrop.
+    var onClick: ((CGWindowID?) -> Void)?
 
     /// The ribbon copy whose active window carries the selection ring; nil while closed.
     private(set) var selection: Ribbon?
+    /// The Space whose ribbon the grid shows; nil while closed.
+    private(set) var spaceID: WindowManager.SpaceID?
     var isOpen: Bool { selection != nil }
     var selectedWindowID: CGWindowID? { selection?.activeWindow?.id }
-
-    static let zoomSeconds = 0.2
 
     private let panel: NSPanel
     private let root: CALayer
@@ -41,7 +42,7 @@ final class ScreenshotGrid {
     private var cache: [CGWindowID: CGImage] = [:]
     /// The panel's display in Quartz coordinates; layer frames are relative to it.
     private var displayFrame = CGRect.zero
-    /// Bumped per open and close, so a close animation's completion never hides a newer open.
+    /// Bumped per open and close, so a zoom's completion never acts on a newer open or close.
     private var generation = 0
 
     init() {
@@ -56,14 +57,20 @@ final class ScreenshotGrid {
         ring.cornerRadius = 9
     }
 
-    /// Shows `thumbnails` on `screen` with `selection`'s active window ringed, zooming each from
-    /// its window's frame into its cell, and captures every window at its thumbnail's pixel size.
-    func open(selection: Ribbon, thumbnails: [Thumbnail], screen: NSScreen) {
+    /// Shows `thumbnails` on `screen`, whose Quartz frame is `displayFrame`, with `selection`'s
+    /// active window ringed, zooming each from its window's frame into its cell, and captures
+    /// every window at its thumbnail's pixel size.
+    func open(selection: Ribbon, spaceID: WindowManager.SpaceID, thumbnails: [Thumbnail],
+              screen: NSScreen, displayFrame: CGRect) {
         close()
         self.selection = selection
+        self.spaceID = spaceID
         generation += 1
-        displayFrame = Self.quartzRect(cocoa: screen.frame)
+        let opening = generation
+        self.displayFrame = displayFrame
         panel.setFrame(screen.frame, display: false)
+        let shown = Set(thumbnails.map(\.id))
+        cache = cache.filter { shown.contains($0.key) }
 
         var pixelSizes: [CGWindowID: CGSize] = [:]
         var gridFrames: [CGWindowID: CGRect] = [:]
@@ -91,11 +98,8 @@ final class ScreenshotGrid {
             for (id, layer) in layers { layer.frame = gridFrames[id] ?? layer.frame }
             backdrop.opacity = 1
         } completion: { [weak self] in
-            guard let self, self.isOpen else { return }
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
+            guard let self, self.generation == opening else { return }
             self.placeRing()
-            CATransaction.commit()
             Self.animate { self.ring.opacity = 1 }
         }
         capture(pixelSizes)
@@ -103,21 +107,9 @@ final class ScreenshotGrid {
 
     /// Moves the selection as the resize overview's `focus` does; false for an unknown direction.
     func moveSelection(_ direction: String, perRow: Int) -> Bool {
-        guard var ribbon = selection else { return false }
-        switch direction {
-        case "left", "h": ribbon.focusLeft()
-        case "right", "l": ribbon.focusRight()
-        case "up", "k": ribbon.focusRowUp(perRow: perRow)
-        case "down", "j": ribbon.focusRowDown(perRow: perRow)
-        case "first": ribbon.focusFirst()
-        case "last": ribbon.focusLast()
-        default: return false
-        }
+        guard var ribbon = selection, ribbon.focus(direction: direction, perRow: perRow) else { return false }
         selection = ribbon
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
         placeRing()
-        CATransaction.commit()
         return true
     }
 
@@ -125,6 +117,7 @@ final class ScreenshotGrid {
     func close() {
         guard isOpen else { return }
         selection = nil
+        spaceID = nil
         generation += 1
         let closing = generation
         let zooming = layers
@@ -143,14 +136,17 @@ final class ScreenshotGrid {
         }
     }
 
-    /// Selects the thumbnail under `point` (panel coordinates) and reports it.
+    /// Reports the thumbnail under `point` (panel coordinates), or nil for the backdrop.
     private func clicked(at point: CGPoint) {
-        guard isOpen, let id = layers.first(where: { $0.value.frame.contains(point) })?.key else { return }
-        selection?.focus(windowID: id)
-        onClick?(id)
+        guard isOpen else { return }
+        onClick?(layers.first(where: { $0.value.frame.contains(point) })?.key)
     }
 
+    /// Moves the ring onto the selected thumbnail without animating.
     private func placeRing() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        defer { CATransaction.commit() }
         guard let id = selectedWindowID, let layer = layers[id] else {
             ring.isHidden = true
             return
@@ -215,11 +211,6 @@ final class ScreenshotGrid {
                width: quartz.width, height: quartz.height)
     }
 
-    private static func quartzRect(cocoa: CGRect) -> CGRect {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return CGRect(x: cocoa.minX, y: primaryHeight - cocoa.maxY, width: cocoa.width, height: cocoa.height)
-    }
-
     private static func makeThumbnailLayer() -> CALayer {
         let layer = CALayer()
         layer.backgroundColor = NSColor(white: 1, alpha: 0.12).cgColor
@@ -237,7 +228,6 @@ final class ScreenshotGrid {
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.hasShadow = false
-        panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         let view = GridView()

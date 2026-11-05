@@ -142,10 +142,14 @@ extension WindowManager {
         return "ok"
     }
 
+    /// The screen showing `sID`: its recorded display, else the active one, else the main screen.
+    private func screen(forSpace sID: SpaceID) -> NSScreen? {
+        screen(forDisplayID: displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0)
+    }
+
     /// Canvas width of the display showing `sID`, as `windowResized` measures it.
     private func canvasWidth(forSpace sID: SpaceID) -> Double? {
-        let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
-        guard let screen = screen(forDisplayID: dID) ?? NSScreen.main else { return nil }
+        guard let screen = screen(forSpace: sID) else { return nil }
         let width = screen.visibleFrame.width - (config.edgeMargin * 2)
         return width > 0 ? width : nil
     }
@@ -153,21 +157,22 @@ extension WindowManager {
     /// Opens the screenshot grid for space `sID` on its display. Cells come from the overview
     /// layout of a copy of the ribbon, so the real ribbon never enters overview.
     private func openScreenshotGrid(forSpace sID: SpaceID) {
-        guard var copy = ribbons[sID], !copy.columns.isEmpty else { return }
-        let dID = displayBySpaceID[sID] ?? activeDisplayID ?? NSScreen.main?.displayID ?? 0
-        guard let screen = screen(forDisplayID: dID) ?? NSScreen.main else { return }
+        guard var copy = ribbons[sID], !copy.columns.isEmpty, let screen = screen(forSpace: sID) else { return }
         let primaryHeight = Double(NSScreen.screens.first?.frame.height ?? 0)
         let visible = QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryHeight)
+        let display = QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryHeight)
         copy.isOverview = true
         let plan = LayoutEngine.computePlan(for: copy, screenFrame: visible, config: config)
+        let frames = serverFrames()
         let thumbnails = plan.placements.map { placement in
             ScreenshotGrid.Thumbnail(
                 id: placement.windowID,
-                windowFrame: serverFrame(placement.windowID) ?? lastAppliedFrames[placement.windowID] ?? placement.frame,
+                windowFrame: frames[placement.windowID] ?? lastAppliedFrames[placement.windowID] ?? placement.frame,
                 cell: placement.frame
             )
         }
-        screenshotGrid.open(selection: copy, thumbnails: thumbnails, screen: screen)
+        screenshotGrid.open(selection: copy, spaceID: sID, thumbnails: thumbnails,
+                            screen: screen, displayFrame: display.cgRect)
     }
 
     public func handleCommand(_ command: String) -> String {
@@ -225,25 +230,11 @@ extension WindowManager {
         switch action {
         case "focus":
             let dir = parts.dropFirst().first?.lowercased() ?? "right"
-            switch dir {
-            case "left", "h": ribbon.focusLeft()
-            case "right", "l": ribbon.focusRight()
-            case "up", "k":
-                if ribbon.isOverview {
-                    ribbon.focusRowUp(perRow: config.overviewColumnsPerRow)
-                } else {
-                    ribbon.focusUp()
-                }
-            case "down", "j":
-                if ribbon.isOverview {
-                    ribbon.focusRowDown(perRow: config.overviewColumnsPerRow)
-                } else {
-                    ribbon.focusDown()
-                }
-            case "first": ribbon.focusFirst()
-            case "last": ribbon.focusLast()
-            default: return "error: unknown focus direction"
+            var r = ribbon
+            guard r.focus(direction: dir, perRow: config.overviewColumnsPerRow) else {
+                return "error: unknown focus direction"
             }
+            ribbon = r
         case "swap", "move":
             ribbon.isOverview = false
             let dir = parts.dropFirst().first?.lowercased() ?? "right"
@@ -387,14 +378,16 @@ extension WindowManager {
         return "ok"
     }
 
-    /// Closes the grid; with `focusSelection` the selected window becomes the ribbon's active
-    /// window and is focused through the retile path, as a `focus` command focuses.
-    func closeScreenshotGrid(focusSelection: Bool) {
-        let selected = screenshotGrid.selectedWindowID
+    /// Closes the grid. With `focusSelection`, `windowID` (the grid's selection when nil) becomes
+    /// the active window of the ribbon the grid opened for and is focused through the retile path,
+    /// as a `focus` command focuses. The grid closes before the focus, so the focus events it
+    /// causes find the grid closed.
+    func closeScreenshotGrid(focusSelection: Bool, windowID: CGWindowID? = nil) {
+        let selected = windowID ?? screenshotGrid.selectedWindowID
+        let spaceID = screenshotGrid.spaceID
         screenshotGrid.close()
-        guard focusSelection, let id = selected else { return }
-        let sID = currentActiveSpaceID()
-        guard var r = ribbons[sID], r.focus(windowID: id) else { return }
+        guard focusSelection, let id = selected, let sID = spaceID,
+              var r = ribbons[sID], r.focus(windowID: id) else { return }
         ribbons[sID] = r
         retileNow(focusWindowID: id, animated: true)
     }

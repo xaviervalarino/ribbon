@@ -213,6 +213,9 @@ extension WindowManager: AXEventObserverDelegate {
             RibbonLog.log("focus event wid=\(id) pid=\(pid) ignored: older than the latest focus request", category: "focus")
             return
         }
+        // A focus the ribbon did not request (a click elsewhere, a new window) leaves the grid
+        // without focusing its selection.
+        closeScreenshotGrid(focusSelection: false)
 
         // A tab switch focuses a hidden tab: it takes over its group's slot, never a new column.
         if isHiddenTab(id) {
@@ -281,6 +284,12 @@ extension WindowManager: AXEventObserverDelegate {
     }
 
     public func applicationActivated(pid: pid_t) {
+        // An activation the ribbon did not cause (Cmd-Tab, a click on another app, an ignored app
+        // included) leaves the grid without focusing its selection.
+        let isEcho = pendingFocusEchoPIDs[pid].map { $0 >= observer.currentEventTime } ?? false
+        if !isEcho {
+            closeScreenshotGrid(focusSelection: false)
+        }
         // Ignored apps never join a ribbon, so their activation has nothing to look up.
         if let name = NSRunningApplication(processIdentifier: pid)?.localizedName,
            config.ignoredApps.contains(name) {

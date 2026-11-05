@@ -191,7 +191,9 @@ public final class WindowManager {
 
     public init() {
         observer.delegate = self
-        screenshotGrid.onClick = { [weak self] _ in self?.closeScreenshotGrid(focusSelection: true) }
+        screenshotGrid.onClick = { [weak self] id in
+            self?.closeScreenshotGrid(focusSelection: id != nil, windowID: id)
+        }
         // Reads live config on every check, so later config changes apply.
         observer.shouldObserve = { [weak self] app in
             guard let self, let name = app.localizedName else { return true }
