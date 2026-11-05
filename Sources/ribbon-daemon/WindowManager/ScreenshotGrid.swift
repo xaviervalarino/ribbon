@@ -26,48 +26,74 @@ final class ScreenshotGrid {
     var isOpen: Bool { selection != nil }
     var selectedWindowID: CGWindowID? { selection?.activeWindow?.id }
 
+    static let zoomSeconds = 0.2
+
     private let panel: NSPanel
-    private let backdrop: CALayer
+    private let root: CALayer
+    private let backdrop = CALayer()
     private let ring = CALayer()
     private var layers: [CGWindowID: CALayer] = [:]
+    /// Each thumbnail's window frame in panel coordinates: where it zooms in from and out to.
+    private var homeFrames: [CGWindowID: CGRect] = [:]
     private var cache: [CGWindowID: CGImage] = [:]
     /// The panel's display in Quartz coordinates; layer frames are relative to it.
     private var displayFrame = CGRect.zero
+    /// Bumped per open and close, so a close animation's completion never hides a newer open.
+    private var generation = 0
 
     init() {
         panel = Self.makePanel()
-        backdrop = panel.contentView!.layer!
+        root = panel.contentView!.layer!
+        backdrop.backgroundColor = NSColor(white: 0, alpha: 0.6).cgColor
+        backdrop.opacity = 0
+        root.addSublayer(backdrop)
         ring.borderColor = NSColor.controlAccentColor.cgColor
         ring.borderWidth = 3
         ring.cornerRadius = 9
     }
 
-    /// Shows `thumbnails` on `screen` with `selection`'s active window ringed, and captures every
-    /// window at its thumbnail's pixel size.
+    /// Shows `thumbnails` on `screen` with `selection`'s active window ringed, zooming each from
+    /// its window's frame into its cell, and captures every window at its thumbnail's pixel size.
     func open(selection: Ribbon, thumbnails: [Thumbnail], screen: NSScreen) {
         close()
         self.selection = selection
+        generation += 1
         displayFrame = Self.quartzRect(cocoa: screen.frame)
         panel.setFrame(screen.frame, display: false)
 
         var pixelSizes: [CGWindowID: CGSize] = [:]
+        var gridFrames: [CGWindowID: CGRect] = [:]
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        backdrop.frame = CGRect(origin: .zero, size: screen.frame.size)
         for thumb in thumbnails {
             let frame = LayoutEngine.aspectFit(thumb.windowFrame.size, in: thumb.cell, margin: Self.cellMargin)
             let layer = Self.makeThumbnailLayer()
-            layer.frame = local(frame)
+            layer.frame = local(thumb.windowFrame)
             layer.contents = cache[thumb.id]
-            backdrop.addSublayer(layer)
+            root.addSublayer(layer)
             layers[thumb.id] = layer
+            homeFrames[thumb.id] = layer.frame
+            gridFrames[thumb.id] = local(frame)
             pixelSizes[thumb.id] = CGSize(width: frame.width * screen.backingScaleFactor,
                                           height: frame.height * screen.backingScaleFactor)
         }
-        backdrop.addSublayer(ring)
-        placeRing()
+        root.addSublayer(ring)
+        ring.opacity = 0
         CATransaction.commit()
-
         panel.orderFrontRegardless()
+
+        Self.animate {
+            for (id, layer) in layers { layer.frame = gridFrames[id] ?? layer.frame }
+            backdrop.opacity = 1
+        } completion: { [weak self] in
+            guard let self, self.isOpen else { return }
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            self.placeRing()
+            CATransaction.commit()
+            Self.animate { self.ring.opacity = 1 }
+        }
         capture(pixelSizes)
     }
 
@@ -91,13 +117,26 @@ final class ScreenshotGrid {
         return true
     }
 
+    /// Zooms every thumbnail back to its window's frame and hides the panel once they land.
     func close() {
         guard isOpen else { return }
         selection = nil
-        panel.orderOut(nil)
-        for layer in layers.values { layer.removeFromSuperlayer() }
+        generation += 1
+        let closing = generation
+        let zooming = layers
+        let homes = homeFrames
         layers.removeAll()
-        ring.removeFromSuperlayer()
+        homeFrames.removeAll()
+        Self.animate {
+            for (id, layer) in zooming { layer.frame = homes[id] ?? layer.frame }
+            backdrop.opacity = 0
+            ring.opacity = 0
+        } completion: { [weak self] in
+            for layer in zooming.values { layer.removeFromSuperlayer() }
+            guard let self, self.generation == closing else { return }
+            self.ring.removeFromSuperlayer()
+            self.panel.orderOut(nil)
+        }
     }
 
     private func placeRing() {
@@ -106,7 +145,17 @@ final class ScreenshotGrid {
             return
         }
         ring.isHidden = false
+        // A layer mid-zoom reports its target frame, which is where the ring belongs.
         ring.frame = layer.frame.insetBy(dx: -4, dy: -4)
+    }
+
+    private static func animate(_ changes: () -> Void, completion: (() -> Void)? = nil) {
+        CATransaction.begin()
+        CATransaction.setAnimationDuration(zoomSeconds)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: .easeInEaseOut))
+        CATransaction.setCompletionBlock(completion)
+        changes()
+        CATransaction.commit()
     }
 
     /// One shared content fetch, then one capture per window at its requested pixel size.
@@ -182,7 +231,6 @@ final class ScreenshotGrid {
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
         let view = NSView()
         view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor(white: 0, alpha: 0.6).cgColor
         panel.contentView = view
         return panel
     }
