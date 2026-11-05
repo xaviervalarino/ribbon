@@ -11,7 +11,9 @@ extension WindowManager {
               win.subrole == (kAXStandardWindowSubrole as String),
               !win.isMinimized,
               !win.isFullscreen,
-              !config.floats(title: win.title) else { return false }
+              !config.floats(title: win.title),
+              // Apps leave the fullscreen button off settings, inspector and utility windows.
+              win.hasValue(kAXFullScreenButtonAttribute) else { return false }
         return true
     }
 
