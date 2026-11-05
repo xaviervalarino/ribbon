@@ -10,8 +10,15 @@ extension LayoutEngine {
     public static func packedGrid(sizes: [CGSize], in bounds: CGRect, gap: Double) -> [CGRect] {
         let n = sizes.count
         guard n > 0 else { return [] }
-        let aspects = sizes.map { $0.width > 0 && $0.height > 0 ? Double($0.width / $0.height) : 1 }
-        let caps = sizes.map { $0.width > 0 && $0.height > 0 ? Double($0.height) : .infinity }
+        let shapes = sizes.map { size -> (aspect: Double, cap: Double) in
+            size.width > 0 && size.height > 0 ? (Double(size.width / size.height), Double(size.height)) : (1, .infinity)
+        }
+        let aspects = shapes.map(\.aspect)
+        let caps = shapes.map(\.cap)
+        // aspectSums[i]: the summed aspect of items `0..<i`.
+        let aspectSums = aspects.reduce(into: [0.0]) { sums, aspect in sums.append(sums.last! + aspect) }
+        /// The summed aspect of items `range`: a row's width at height 1, gaps aside.
+        func aspectSum(_ range: Range<Int>) -> Double { aspectSums[range.upperBound] - aspectSums[range.lowerBound] }
         let width = Double(bounds.width)
         let height = Double(bounds.height)
 
@@ -19,17 +26,19 @@ extension LayoutEngine {
         func cost(_ i: Int, _ j: Int) -> Double {
             let available = width - Double(j - i - 1) * gap
             guard available > 0 else { return .infinity }
-            return aspects[i..<j].reduce(0, +) / available
+            return aspectSum(i..<j) / available
         }
 
         // best[k][j]: the smallest worst-row cost splitting the first j items into k rows.
-        // Ties keep the later split, so earlier rows hold more tiles.
+        // Ties keep the later split, so earlier rows hold more tiles. A split only follows a
+        // prefix that has a finite cost, so every split chain ends at item 0 and covers all
+        // items even when no k-row split fits: those rows lay out at zero height.
         var best = Array(repeating: Array(repeating: Double.infinity, count: n + 1), count: n + 1)
         var split = Array(repeating: Array(repeating: 0, count: n + 1), count: n + 1)
         best[0][0] = 0
         for k in 1...n {
             for j in k...n {
-                for i in (k - 1)..<j {
+                for i in (k - 1)..<j where best[k - 1][i].isFinite {
                     let worst = max(best[k - 1][i], cost(i, j))
                     if worst <= best[k][j] {
                         best[k][j] = worst
@@ -53,7 +62,7 @@ extension LayoutEngine {
                 (range: range, height: max(0, min(shared, caps[range].min() ?? .infinity)))
             }
             let area = laid.reduce(0) { sum, row in
-                sum + row.height * row.height * aspects[row.range].reduce(0, +)
+                sum + row.height * row.height * aspectSum(row.range)
             }
             if area > chosenArea {
                 chosen = laid
@@ -66,7 +75,7 @@ extension LayoutEngine {
         var frames: [CGRect] = []
         frames.reserveCapacity(n)
         for row in chosen {
-            let rowWidth = aspects[row.range].reduce(0, +) * row.height + Double(row.range.count - 1) * gap
+            let rowWidth = aspectSum(row.range) * row.height + Double(row.range.count - 1) * gap
             var x = Double(bounds.midX) - rowWidth / 2
             for index in row.range {
                 let tileWidth = aspects[index] * row.height
@@ -99,14 +108,14 @@ extension LayoutEngine {
                 .filter { frames[$0].minY == rowTops[row + rowOffset] }
                 .min { abs(frames[$0].midX - midX) < abs(frames[$1].midX - midX) } ?? current
         }
-        switch direction {
-        case "left", "h": return max(0, current - 1)
-        case "right", "l": return max(0, min(last, current + 1))
-        case "up", "k": return nearest(rowOffset: -1)
-        case "down", "j": return nearest(rowOffset: 1)
-        case "first": return 0
-        case "last": return max(0, last)
-        default: return nil
+        switch FocusDirection(direction) {
+        case .left: return max(0, current - 1)
+        case .right: return max(0, min(last, current + 1))
+        case .up: return nearest(rowOffset: -1)
+        case .down: return nearest(rowOffset: 1)
+        case .first: return 0
+        case .last: return max(0, last)
+        case nil: return nil
         }
     }
 }

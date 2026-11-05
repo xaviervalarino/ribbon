@@ -477,6 +477,14 @@ func runTests() {
         (a.minY == b.minY && b.minX >= a.maxX + 19.999) || b.minY >= a.maxY + 19.999
     }, "Many windows keep strip order across rows without overlapping")
     TestRunner.assertTrue(Set(many.map(\.minY)).count > 1, "Many windows wrap into several rows")
+    let fiveWindows = Array(repeating: CGSize(width: 800, height: 600), count: 5)
+    let tooSmall = LayoutEngine.packedGrid(sizes: fiveWindows, in: CGRect(x: 0, y: 0, width: 30, height: 30), gap: 24)
+    TestRunner.assertEqual(tooSmall.count, 5, "Bounds too small for any row still give every window a tile")
+    TestRunner.assertTrue(tooSmall.allSatisfy { $0.width == 0 && $0.height == 0 },
+                          "Bounds too small for any row give zero-size tiles")
+    TestRunner.assertEqual(LayoutEngine.packedGrid(sizes: fiveWindows, in: CGRect(x: 0, y: 0, width: 0, height: 500),
+                                                   gap: 24).count,
+                           5, "Zero-width bounds still give every window a tile")
 
     // 14c. packedGridStep walks packed rows
     let navTiles = [CGRect(x: 0, y: 0, width: 90, height: 50), CGRect(x: 100, y: 0, width: 90, height: 50),
@@ -668,6 +676,13 @@ func runTests() {
     TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "first moves to the first column")
     TestRunner.assertFalse(dirRibbon.focus(direction: "sideways", perRow: 3), "unknown direction returns false")
     TestRunner.assertEqual(dirRibbon.activeColumnIndex, 0, "unknown direction leaves focus alone")
+
+    // 22. FocusDirection parses the names the focus command and the grid accept
+    TestRunner.assertEqual(["left", "h", "right", "l", "up", "k", "down", "j", "first", "last"].map(FocusDirection.init),
+                           [.left, .left, .right, .right, .up, .up, .down, .down, .first, .last],
+                           "Each direction and its vim alias parse")
+    TestRunner.assertEqual(FocusDirection("sideways"), nil, "An unknown name parses to nil")
+    TestRunner.assertEqual(FocusDirection("H"), nil, "Names are case-sensitive; callers lowercase first")
 
     guard TestRunner.summary() else {
         exit(1)
