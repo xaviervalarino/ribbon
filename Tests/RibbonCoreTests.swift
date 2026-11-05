@@ -514,6 +514,61 @@ func runTests() {
     c3Ribbon.focusLast()
     TestRunner.assertEqual(c3Ribbon.activeColumnIndex, 3, "focusLast moves activeColumnIndex to 3")
 
+    // 18. SwipeStepper thresholds, axis lock, reversal, finger reset, and excess drop
+    var stepper = SwipeStepper()
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.06, dy: 0, config: config), nil, "Under 0.03 travel does not step")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), .focusRight, "First negative crossing at 0.03 steps focus right")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.42, dy: 0, config: config), nil, "Second step the same way needs 0.15 travel")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), .focusRight, "Second step fires at 0.15 travel")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: 0.09, dy: 0, config: config), nil, "Reversal under 0.04 travel does not step")
+    TestRunner.assertEqual(stepper.feed(fingers: 3, dx: 0.03, dy: 0, config: config), .focusLeft, "Reversal at 0.04 travel steps focus left")
+
+    var verticalStepper = SwipeStepper()
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 3, dx: 0, dy: 0.09, config: config), nil, "Vertical crossing at 0.03 locks y axis without stepping")
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 3, dx: -0.60, dy: 0, config: config), nil, "Locked y axis never steps on horizontal motion")
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 2, dx: 0, dy: 0, config: config), nil, "Finger count of 2 resets travel and axis")
+    TestRunner.assertEqual(verticalStepper.feed(fingers: 3, dx: 0.09, dy: 0, config: config), .focusLeft, "After 2-finger reset, 0.03 positive travel steps focus left")
+
+    var flickStepper = SwipeStepper()
+    TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.90, dy: 0, config: config), .focusRight, "Fast flick fires one step")
+    TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), nil, "Excess travel past threshold is dropped")
+
+    // 19. A released pan focuses a fully visible column so the strip stays put
+    let panGeometry: [(x: Double, width: Double)] = [(x: 0, width: 750), (x: 760, width: 1200), (x: 1970, width: 1200)]
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 0, canvasWidth: 1500, activeIndex: 1), 0,
+                           "Panned to the left end, the fully visible left column wins over the half-visible active one")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 700, canvasWidth: 1500, activeIndex: 0), 1,
+                           "The active column scrolled off loses to the fully visible one")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 1100, canvasWidth: 1500, activeIndex: 2), 1,
+                           "With nothing fully visible, the most visible column wins over the active one")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 1215, canvasWidth: 1500, activeIndex: 2), 2,
+                           "A tie in visible width keeps the active column")
+    let narrowGeometry: [(x: Double, width: Double)] = [(x: 0, width: 400), (x: 410, width: 400), (x: 820, width: 400)]
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: narrowGeometry, offset: 0, canvasWidth: 1500, activeIndex: 2), 2,
+                           "A fully visible active column keeps focus")
+    let fourGeometry: [(x: Double, width: Double)] = [(x: 0, width: 400), (x: 410, width: 400), (x: 820, width: 400), (x: 1230, width: 400)]
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: fourGeometry, offset: 700, canvasWidth: 1000, activeIndex: 0), 2,
+                           "The fully visible column nearest the active one wins")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 1215, canvasWidth: 1500, activeIndex: 9), 2,
+                           "An out-of-range active index clamps to the last column")
+    TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: [], offset: 0, canvasWidth: 1500, activeIndex: 0), nil,
+                           "No columns, no target")
+
+    // 20. A released pan centers a column left near the canvas center
+    func panRibbon(active: Int, offset: Double) -> Ribbon {
+        Ribbon(columns: (0..<3).map { i in
+            ColumnModel(windows: [WindowModel(id: CGWindowID(901 + i), pid: 1, title: "P\(i)", appName: "App")], widthRatio: 0.5)
+        }, activeColumnIndex: active, viewportOffset: offset)
+    }
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 400), canvasWidth: 1500, config: config), 376,
+                           "A column 24pt off center snaps to center")
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 752), canvasWidth: 1500, config: config), 752,
+                           "A column flush left stays put")
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 0, offset: 0), canvasWidth: 1500, config: config), 0,
+                           "The first column at the strip's start stays put")
+    TestRunner.assertEqual(LayoutEngine.panReleaseOffset(for: panRibbon(active: 1, offset: 400), canvasWidth: 1500, config: Config(panCenterSnap: 0)), 400,
+                           "A zero threshold never centers")
+
     guard TestRunner.summary() else {
         exit(1)
     }

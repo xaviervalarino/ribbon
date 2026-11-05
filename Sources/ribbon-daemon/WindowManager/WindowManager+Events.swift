@@ -8,10 +8,21 @@ extension WindowManager {
 
     public func handleActiveSpaceDidChange() {
         guard !isDisplayReconfiguring else { return }
+        panController.endPan(snap: false)
 
         let topology = SpaceManager.currentTopology()
         for (sID, dID) in topology.displayBySpace {
             displayBySpaceID[sID] = dID
+        }
+
+        // Space changes during a drag defer reconciliation and retiling until mouse-up.
+        if inputTap.isRunning && CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            dragDirty = true
+            if !spaceChangeDeferred {
+                spaceChangeDeferred = true
+                RibbonLog.log("space change deferred to drag end", category: "drag")
+            }
+            return
         }
 
         reconcileWindows(sortHorizontally: false)
@@ -175,7 +186,13 @@ extension WindowManager: AXEventObserverDelegate {
                     activeSpaceID = newSID
                     lastAppliedFrames.removeValue(forKey: id)
                     let isDragging = CGEventSource.buttonState(.combinedSessionState, button: .left)
-                    if !isDragging {
+                    if isDragging {
+                        if draggingWindowID != id {
+                            RibbonLog.log("drag started wid=\(id)", category: "drag")
+                            draggingWindowID = id
+                        }
+                        dragDirty = true
+                    } else {
                         scheduleRetile()
                     }
                     return
@@ -186,6 +203,13 @@ extension WindowManager: AXEventObserverDelegate {
         // Manual move: mark dirty in diff cache; keyboard retiles snap it back,
         // but avoid fighting the mouse cursor mid-drag.
         lastAppliedFrames.removeValue(forKey: id)
+        if CGEventSource.buttonState(.combinedSessionState, button: .left) {
+            if draggingWindowID != id {
+                RibbonLog.log("drag started wid=\(id)", category: "drag")
+                draggingWindowID = id
+            }
+            dragDirty = true
+        }
     }
 
     public func windowFocused(element: AXElement, pid: pid_t) {
@@ -370,5 +394,114 @@ extension WindowManager: AXEventObserverDelegate {
             ribbons[sID]?.removeWindows(pid: pid)
         }
         scheduleRetile()
+    }
+}
+
+// MARK: - InputTapDelegate
+
+extension WindowManager: InputTapDelegate {
+    func mouseUp() {
+        draggingWindowID = nil
+        // A click mid-pan ends it without the snap's focus, so the click's own focus event stands;
+        // the retile slides the strip back to the active column instead of leaving the pan offset.
+        if panController.isPanning {
+            panController.endPan(snap: false)
+            retileNow(animated: true)
+        }
+        guard dragDirty else { return }
+        dragDirty = false
+        let spaceChanged = spaceChangeDeferred
+        spaceChangeDeferred = false
+        RibbonLog.log("drag ended: \(spaceChanged ? "space change" : "retile")", category: "drag")
+        let finish = { [weak self] in
+            guard let self else { return }
+            if spaceChanged {
+                self.handleActiveSpaceDidChange()
+            } else {
+                self.scheduleRetile()
+            }
+        }
+        // An edge drag that moved the origin also resized: retiling before the resize debounce
+        // measures the new width writes the old width back and the debounce then sees no change.
+        if resizeDebounceWork != nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(200), execute: finish)
+        } else {
+            finish()
+        }
+    }
+
+    func pointerMoved(dx: Double) {
+        panController.handleMotion(dx: dx)
+    }
+
+    func setTouchesProbe(_ on: Bool) {
+        touchesProbe.bucketTimer?.cancel()
+        touchesProbe.bucketTimer = nil
+        touchesProbe.endWork?.cancel()
+        touchesProbe.endWork = nil
+
+        if !on {
+            if touchesProbe.isArmed {
+                flushTouchesProbeBucket()
+                touchesProbe = TouchesProbeState()
+                inputTap.setGestureMonitoring(false)
+                RibbonLog.log("touches probe off", category: "input")
+            }
+            return
+        }
+
+        flushTouchesProbeBucket()
+        touchesProbe = TouchesProbeState(isArmed: true)
+        inputTap.setGestureMonitoring(true)
+
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+        timer.setEventHandler { [weak self] in
+            self?.flushTouchesProbeBucket()
+        }
+        timer.resume()
+        touchesProbe.bucketTimer = timer
+
+        let endWork = DispatchWorkItem { [weak self] in
+            self?.setTouchesProbe(false)
+        }
+        touchesProbe.endWork = endWork
+        DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(10), execute: endWork)
+    }
+
+    private func flushTouchesProbeBucket() {
+        guard touchesProbe.events > 0 || touchesProbe.swipes > 0 else { return }
+        let dxText = String(format: "%.3f", touchesProbe.dx)
+        RibbonLog.log(
+            "touches=\(touchesProbe.maxTouches) events=\(touchesProbe.events) dx=\(dxText) swipes=\(touchesProbe.swipes) swipeDX=\(touchesProbe.swipeDX)",
+            category: "input"
+        )
+        touchesProbe.maxTouches = 0
+        touchesProbe.events = 0
+        touchesProbe.dx = 0
+        touchesProbe.swipes = 0
+        touchesProbe.swipeDX = 0
+    }
+
+    func gesture(_ event: CGEvent) {
+        guard touchesProbe.isArmed, let nsEvent = NSEvent(cgEvent: event) else { return }
+        let touches = nsEvent.touches(matching: .touching, in: nil).filter { $0.type == .indirect }
+        let count = touches.count
+        let meanX: Double? = count > 0
+            ? touches.reduce(0.0) { $0 + Double($1.normalizedPosition.x) } / Double(count)
+            : nil
+        if count > 0, count == touchesProbe.lastTouchCount, let meanX, let prevX = touchesProbe.lastMeanX {
+            touchesProbe.dx += meanX - prevX
+        }
+        touchesProbe.lastTouchCount = count
+        touchesProbe.lastMeanX = meanX
+        touchesProbe.events += 1
+        touchesProbe.maxTouches = max(touchesProbe.maxTouches, count)
+    }
+
+    func swipe(_ event: CGEvent) {
+        guard touchesProbe.isArmed, let nsEvent = NSEvent(cgEvent: event) else { return }
+        touchesProbe.swipes += 1
+        touchesProbe.swipeDX += Double(nsEvent.deltaX)
     }
 }

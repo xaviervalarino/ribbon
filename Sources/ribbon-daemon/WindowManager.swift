@@ -84,6 +84,7 @@ public final class WindowManager {
 
     public var config = Config.default
     let observer = AXEventObserver()
+    let inputTap = InputTap()
     let socketServer = SocketServer()
     var trackedWindows: [CGWindowID: AXElement] = [:]
     var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
@@ -95,6 +96,23 @@ public final class WindowManager {
     var retileAnimated = false
     var resizeDebounceWork: DispatchWorkItem?
     var isDisplayReconfiguring: Bool = false
+    var dragDirty = false
+    var draggingWindowID: CGWindowID?
+    var spaceChangeDeferred = false
+    lazy var panController = PanController(windowManager: self)
+    struct TouchesProbeState {
+        var isArmed = false
+        var bucketTimer: DispatchSourceTimer?
+        var endWork: DispatchWorkItem?
+        var lastTouchCount = 0
+        var lastMeanX: Double?
+        var maxTouches = 0
+        var events = 0
+        var dx = 0.0
+        var swipes = 0
+        var swipeDX = 0.0
+    }
+    var touchesProbe = TouchesProbeState()
     var displaySamplingTimer: DispatchSourceTimer?
     var displaySamplingCount: Int = 0
 
@@ -221,6 +239,8 @@ public final class WindowManager {
 
         // Start event observer
         observer.start()
+        inputTap.delegate = self
+        inputTap.start()
 
         // Scan existing windows
         discoverExistingWindows()
@@ -253,7 +273,10 @@ public final class WindowManager {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.displayConfigurationChanged()
+            guard let self else { return }
+            // Gesture events arrive with no touches after sleep until the tap is recreated.
+            self.inputTap.start()
+            self.displayConfigurationChanged()
         }
 
         // A display link stops ticking while its display sleeps; waking it posts no reconfiguration.
@@ -345,6 +368,11 @@ public final class WindowManager {
         retileAnimated = false
         resizeDebounceWork?.cancel()
         resizeDebounceWork = nil
+        panController.endPan(snap: false)
+        touchesProbe.bucketTimer?.cancel()
+        touchesProbe.bucketTimer = nil
+        touchesProbe.endWork?.cancel()
+        touchesProbe.endWork = nil
         displaySamplingTimer?.cancel()
         displaySamplingTimer = nil
         if let obs = screenParametersObserver {
@@ -355,6 +383,8 @@ public final class WindowManager {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             wakeObserver = nil
         }
+        inputTap.unfreezePointer()
+        inputTap.stop()
         if let obs = screensWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             screensWakeObserver = nil

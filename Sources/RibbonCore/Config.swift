@@ -47,6 +47,13 @@ public struct Config: Sendable, Codable {
     public var resizeMode: ResizeMode
     public var focusTiming: FocusTiming
     public var overviewColumnsPerRow: Int
+    public var swipeFingers: Int
+    public var swipeFirst: Double
+    public var swipeStep: Double
+    public var swipeReverse: Double
+    /// A released pan centers the focused column when its center lies within this fraction of the
+    /// canvas width from the canvas center; 0 leaves the strip where the pan put it.
+    public var panCenterSnap: Double
 
     public init(
         windowGap: Double = 4.0,
@@ -83,7 +90,12 @@ public struct Config: Sendable, Codable {
         scrollAnimationMs: Int = 55,
         resizeMode: ResizeMode = .end,
         focusTiming: FocusTiming = .end,
-        overviewColumnsPerRow: Int = 3
+        overviewColumnsPerRow: Int = 3,
+        swipeFingers: Int = 3,
+        swipeFirst: Double = 0.03,
+        swipeStep: Double = 0.15,
+        swipeReverse: Double = 0.04,
+        panCenterSnap: Double = 0.15
     ) {
         self.windowGap = windowGap
         self.edgeMargin = edgeMargin
@@ -100,6 +112,11 @@ public struct Config: Sendable, Codable {
         self.resizeMode = resizeMode
         self.focusTiming = focusTiming
         self.overviewColumnsPerRow = overviewColumnsPerRow
+        self.swipeFingers = swipeFingers
+        self.swipeFirst = swipeFirst
+        self.swipeStep = swipeStep
+        self.swipeReverse = swipeReverse
+        self.panCenterSnap = panCenterSnap
     }
 
     public static let `default` = Config()
