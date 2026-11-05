@@ -14,7 +14,7 @@ final class SlotGhosts {
     private var panels: [CGWindowID: NSPanel] = [:]
     private var spare: [NSPanel] = []
     private var capturing: Set<CGWindowID> = []
-    /// Ghosts kept invisible until their first image lands, so they never show the plain fill.
+    /// Ghosts kept invisible until their first capture lands or fails.
     private var awaitingImage: Set<CGWindowID> = []
 
     /// Window images shared by every `SlotGhosts`, so a window handed between the slide ghosts and
@@ -28,6 +28,8 @@ final class SlotGhosts {
     private static var releases: [CGWindowID: Int] = [:]
     /// Windows whose image is the shrunken copy, which never shrinks again.
     private static var shrunk: Set<CGWindowID> = []
+    /// Windows waiting for `warm`'s next batch.
+    private static var toWarm: Set<CGWindowID> = []
     private static let snapshotGrace: DispatchTimeInterval = .seconds(3)
     /// How far a block runs past an edge where its window continues, so the panel clips the
     /// block's corners and border there; above the block's 10pt corner radius.
@@ -120,9 +122,6 @@ final class SlotGhosts {
         }
     }
 
-    /// Windows waiting for `warm`'s next batch.
-    private static var toWarm: Set<CGWindowID> = []
-
     /// Captures `id` at quarter size within a second, unless it already has an image, so its first
     /// ghost never starts empty. Calls inside that second share one capture batch.
     static func warm(_ id: CGWindowID) {
@@ -137,11 +136,9 @@ final class SlotGhosts {
             SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, _ in
                 for window in content?.windows ?? [] where ids.contains(window.windowID) {
                     let filter = SCContentFilter(desktopIndependentWindow: window)
-                    let config = SCStreamConfiguration()
-                    config.width = max(1, Int(window.frame.width * CGFloat(filter.pointPixelScale)) / 4)
-                    config.height = max(1, Int(window.frame.height * CGFloat(filter.pointPixelScale)) / 4)
-                    config.showsCursor = false
-                    config.ignoreShadowsSingleWindow = true
+                    let config = screenshotConfig(window, filter)
+                    config.width = max(1, config.width / 4)
+                    config.height = max(1, config.height / 4)
                     SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, _ in
                         guard let image else { return }
                         DispatchQueue.main.async {
@@ -186,15 +183,22 @@ final class SlotGhosts {
                 return self.captured(id, nil, started, error)
             }
             let filter = SCContentFilter(desktopIndependentWindow: window)
-            let config = SCStreamConfiguration()
-            config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
-            config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
-            config.showsCursor = false
-            config.ignoreShadowsSingleWindow = true
+            let config = Self.screenshotConfig(window, filter)
             SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, error in
                 self.captured(id, image, started, error)
             }
         }
+    }
+
+    /// A full-pixel-size, cursorless, shadowless screenshot of `window`.
+    @available(macOS 14, *)
+    private static func screenshotConfig(_ window: SCWindow, _ filter: SCContentFilter) -> SCStreamConfiguration {
+        let config = SCStreamConfiguration()
+        config.width = Int(window.frame.width * CGFloat(filter.pointPixelScale))
+        config.height = Int(window.frame.height * CGFloat(filter.pointPixelScale))
+        config.showsCursor = false
+        config.ignoreShadowsSingleWindow = true
+        return config
     }
 
     private func captured(_ id: CGWindowID, _ image: CGImage?, _ started: DispatchTime, _ error: Error?) {
@@ -209,7 +213,7 @@ final class SlotGhosts {
             }
             guard let panel = self.panels[id] else { return }
             if let image { Self.block(of: panel)?.layer?.contents = image }
-            // A failed capture (no Screen Recording grant) fades in the plain fill.
+            // The first capture fades its image in; a failed one (no Screen Recording grant), the plain fill.
             if self.awaitingImage.remove(id) != nil {
                 NSAnimationContext.runAnimationGroup { context in
                     context.duration = 0.12
