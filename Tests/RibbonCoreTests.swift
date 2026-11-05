@@ -478,6 +478,29 @@ func runTests() {
     }, "Many windows keep strip order across rows without overlapping")
     TestRunner.assertTrue(Set(many.map(\.minY)).count > 1, "Many windows wrap into several rows")
 
+    // 14c. packedGridStep walks packed rows
+    let navTiles = [CGRect(x: 0, y: 0, width: 90, height: 50), CGRect(x: 100, y: 0, width: 90, height: 50),
+                    CGRect(x: 200, y: 0, width: 90, height: 50),
+                    CGRect(x: 50, y: 60, width: 90, height: 50), CGRect(x: 150, y: 60, width: 90, height: 50)]
+    func step(_ from: Int, _ direction: String) -> Int? {
+        LayoutEngine.packedGridStep(frames: navTiles, from: from, direction: direction)
+    }
+    TestRunner.assertEqual(step(2, "right"), 3, "right steps into the next row in order")
+    TestRunner.assertEqual(step(3, "h"), 2, "h steps back into the previous row in order")
+    TestRunner.assertEqual(step(4, "l"), 4, "right at the last tile stays put")
+    TestRunner.assertEqual(step(0, "left"), 0, "left at the first tile stays put")
+    TestRunner.assertEqual(step(2, "down"), 4, "down picks the nearest center in the row below")
+    TestRunner.assertEqual(step(0, "j"), 3, "j picks the nearest center in the row below")
+    TestRunner.assertEqual(step(3, "up"), 0, "up on a tie picks the earlier tile")
+    TestRunner.assertEqual(step(4, "k"), 1, "k picks the nearest center in the row above")
+    TestRunner.assertEqual(step(4, "down"), 4, "down in the bottom row stays put")
+    TestRunner.assertEqual(step(1, "up"), 1, "up in the top row stays put")
+    TestRunner.assertEqual(step(3, "first"), 0, "first jumps to the first tile")
+    TestRunner.assertEqual(step(1, "last"), 4, "last jumps to the last tile")
+    TestRunner.assertEqual(step(1, "sideways"), nil, "unknown direction returns nil")
+    TestRunner.assertEqual(LayoutEngine.packedGridStep(frames: [], from: 0, direction: "down"), 0,
+                           "no tiles stays at zero")
+
     // 15. adjustWidth grow, clamp, and explicit width clearing (C.1)
     var c1Ribbon = Ribbon(columns: [
         ColumnModel(windows: [WindowModel(id: 601, pid: 1, title: "A", appName: "App1")], widthRatio: 0.5),

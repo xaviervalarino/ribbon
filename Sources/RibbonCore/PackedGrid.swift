@@ -77,4 +77,36 @@ extension LayoutEngine {
         }
         return frames
     }
+
+    /// The tile a `focus` direction moves to from `index` among `frames`, laid out as
+    /// `packedGrid` lays them: left and right step through the order, up and down move to the
+    /// tile in the adjacent row whose center is nearest horizontally (the earlier one on a tie),
+    /// and first and last jump to the ends. The edges stay put. Nil for an unknown direction.
+    public static func packedGridStep(frames: [CGRect], from index: Int, direction: String) -> Int? {
+        let last = frames.count - 1
+        let current = max(0, min(index, last))
+        /// The tile nearest the current one horizontally in the row `rowOffset` rows away.
+        func nearest(rowOffset: Int) -> Int {
+            guard frames.indices.contains(current) else { return current }
+            // Every tile in a packed row shares its top edge.
+            let rowTops = frames.map(\.minY).reduce(into: [CGFloat]()) { tops, y in
+                if tops.last != y { tops.append(y) }
+            }
+            guard let row = rowTops.firstIndex(of: frames[current].minY),
+                  rowTops.indices.contains(row + rowOffset) else { return current }
+            let midX = frames[current].midX
+            return frames.indices
+                .filter { frames[$0].minY == rowTops[row + rowOffset] }
+                .min { abs(frames[$0].midX - midX) < abs(frames[$1].midX - midX) } ?? current
+        }
+        switch direction {
+        case "left", "h": return max(0, current - 1)
+        case "right", "l": return max(0, min(last, current + 1))
+        case "up", "k": return nearest(rowOffset: -1)
+        case "down", "j": return nearest(rowOffset: 1)
+        case "first": return 0
+        case "last": return max(0, last)
+        default: return nil
+        }
+    }
 }

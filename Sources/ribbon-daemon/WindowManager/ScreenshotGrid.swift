@@ -1,9 +1,9 @@
 import AppKit
 import ScreenCaptureKit
 
-/// An overlay over one display showing a capture of every window of a ribbon, laid out in the
-/// overview grid. The real windows never move: `moveSelection` walks a copy of the ribbon laid
-/// out with `isOverview`, and the caller focuses `selectedWindowID` when it closes the grid.
+/// An overlay over one display showing a capture of every window of a ribbon, packed into rows.
+/// The real windows never move: `moveSelection` walks the tiles, and the caller focuses
+/// `selectedWindowID` when it closes the grid.
 ///
 /// Captures need Screen Recording; until it is granted every thumbnail stays a placeholder block.
 /// The last capture per window is kept, so the next open shows it at once while a fresh capture
@@ -26,12 +26,14 @@ final class ScreenshotGrid {
     /// Runs on a click in the grid with the clicked thumbnail's window, or nil for the backdrop.
     var onClick: ((CGWindowID?) -> Void)?
 
-    /// The ribbon copy whose active window carries the selection ring; nil while closed.
-    private(set) var selection: Ribbon?
     /// The Space whose ribbon the grid shows; nil while closed.
     private(set) var spaceID: WindowManager.SpaceID?
-    var isOpen: Bool { selection != nil }
-    var selectedWindowID: CGWindowID? { selection?.activeWindow?.id }
+    var isOpen: Bool { spaceID != nil }
+    var selectedWindowID: CGWindowID? { thumbnails.indices.contains(selectedIndex) ? thumbnails[selectedIndex].id : nil }
+
+    /// The shown thumbnails in strip order; the index into them carries the selection ring.
+    private var thumbnails: [Thumbnail] = []
+    private var selectedIndex = 0
 
     private let panel: NSPanel
     private let root: CALayer
@@ -58,13 +60,14 @@ final class ScreenshotGrid {
         ring.cornerRadius = 9
     }
 
-    /// Shows `thumbnails` on `screen`, whose Quartz frame is `displayFrame`, with `selection`'s
-    /// active window ringed, zooming each from its window's frame into its tile, and captures
-    /// every window at its thumbnail's pixel size.
-    func open(selection: Ribbon, spaceID: WindowManager.SpaceID, thumbnails: [Thumbnail],
+    /// Shows `thumbnails` on `screen`, whose Quartz frame is `displayFrame`, with `selectedID`
+    /// ringed (the first thumbnail when absent), zooming each from its window's frame into its
+    /// tile, and captures every window at its thumbnail's pixel size.
+    func open(thumbnails: [Thumbnail], selectedID: CGWindowID?, spaceID: WindowManager.SpaceID,
               screen: NSScreen, displayFrame: CGRect) {
         close()
-        self.selection = selection
+        self.thumbnails = thumbnails
+        selectedIndex = thumbnails.firstIndex { $0.id == selectedID } ?? 0
         self.spaceID = spaceID
         generation += 1
         let opening = generation
@@ -105,10 +108,11 @@ final class ScreenshotGrid {
         capture(pixelSizes)
     }
 
-    /// Moves the selection as the resize overview's `focus` does; false for an unknown direction.
-    func moveSelection(_ direction: String, perRow: Int) -> Bool {
-        guard var ribbon = selection, ribbon.focus(direction: direction, perRow: perRow) else { return false }
-        selection = ribbon
+    /// Moves the selection across the packed rows; false for an unknown direction.
+    func moveSelection(_ direction: String) -> Bool {
+        guard let next = LayoutEngine.packedGridStep(frames: thumbnails.map(\.tile), from: selectedIndex,
+                                                     direction: direction) else { return false }
+        selectedIndex = next
         placeRing()
         return true
     }
@@ -116,7 +120,7 @@ final class ScreenshotGrid {
     /// Zooms every thumbnail back to its window's frame and hides the panel once they land.
     func close() {
         guard isOpen else { return }
-        selection = nil
+        thumbnails = []
         spaceID = nil
         generation += 1
         let closing = generation

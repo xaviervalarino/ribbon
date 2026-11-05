@@ -166,14 +166,13 @@ extension WindowManager {
     /// Opens the screenshot grid for space `sID` on its display: one tile per window in strip
     /// order, packed into rows. The real ribbon never enters overview.
     private func openScreenshotGrid(forSpace sID: SpaceID) {
-        guard var copy = ribbons[sID], !copy.columns.isEmpty, let screen = screen(forSpace: sID) else { return }
+        guard let ribbon = ribbons[sID], !ribbon.columns.isEmpty, let screen = screen(forSpace: sID) else { return }
         let primaryHeight = Double(NSScreen.screens.first?.frame.height ?? 0)
         let visible = QuartzGeometry.toQuartzRect(cocoaFrame: screen.visibleFrame, primaryScreenHeight: primaryHeight)
         let display = QuartzGeometry.toQuartzRect(cocoaFrame: screen.frame, primaryScreenHeight: primaryHeight)
-        copy.isOverview = true
         let frames = serverFrames()
         // A window without a known frame has neither a size to lay out nor a frame to zoom from.
-        let windows = copy.columns.flatMap(\.windows).compactMap { window in
+        let windows = ribbon.columns.flatMap(\.windows).compactMap { window in
             (frames[window.id] ?? lastAppliedFrames[window.id]).map { (id: window.id, frame: $0) }
         }
         let tiles = LayoutEngine.packedGrid(sizes: windows.map(\.frame.size),
@@ -182,7 +181,7 @@ extension WindowManager {
         let thumbnails = zip(windows, tiles).map { window, tile in
             ScreenshotGrid.Thumbnail(id: window.id, windowFrame: window.frame, tile: tile)
         }
-        screenshotGrid.open(selection: copy, spaceID: sID, thumbnails: thumbnails,
+        screenshotGrid.open(thumbnails: thumbnails, selectedID: ribbon.activeWindow?.id, spaceID: sID,
                             screen: screen, displayFrame: display.cgRect)
     }
 
@@ -235,8 +234,7 @@ extension WindowManager {
             switch action {
             case "focus":
                 let dir = parts.dropFirst().first?.lowercased() ?? "right"
-                return screenshotGrid.moveSelection(dir, perRow: config.overviewColumnsPerRow)
-                    ? "ok" : "error: unknown focus direction"
+                return screenshotGrid.moveSelection(dir) ? "ok" : "error: unknown focus direction"
             case "toggle-overview", "overview":
                 if parts.count == 1 {
                     closeScreenshotGrid(focusSelection: true)
