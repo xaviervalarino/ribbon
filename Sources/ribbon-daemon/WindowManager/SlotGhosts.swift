@@ -3,15 +3,26 @@ import ScreenCaptureKit
 
 /// Blocks drawn where a window belongs while its app is too slow to show it there, so a slide
 /// never leaves an empty slot. A block shows an image of its window, captured when the ghost first
-/// shows, once Screen Recording is granted; until then it is a plain fill. The panels sit one level below normal windows, so they show
+/// shows, once Screen Recording is granted; until then it is a plain fill. A block cut at a display
+/// edge runs past it, so it reads as the window overflowing. The panels sit one level below normal windows, so they show
 /// only through gaps; window discovery admits layer 0 only, so they are never tiled.
 ///
 /// Confined to the main queue.
 final class SlotGhosts {
     private var panels: [CGWindowID: NSPanel] = [:]
     private var spare: [NSPanel] = []
-    private var snapshots: [CGWindowID: CGImage] = [:]
     private var capturing: Set<CGWindowID> = []
+
+    /// Window images shared by every `SlotGhosts`, so a window handed between the slide ghosts and
+    /// the seam ghosts keeps its image instead of showing the plain fill while it is captured again.
+    private static var snapshots: [CGWindowID: CGImage] = [:]
+    /// Ghosts showing each window, across every `SlotGhosts`. A window's image is dropped
+    /// `snapshotGrace` after its last ghost hides: a full-size capture runs to tens of MB.
+    private static var users: [CGWindowID: Int] = [:]
+    private static let snapshotGrace: DispatchTimeInterval = .seconds(3)
+    /// How far a block runs past an edge where its window continues, so the panel clips the
+    /// block's corners and border there; above the block's 10pt corner radius.
+    private static let overflow: CGFloat = 12
 
     /// Shows or moves the ghost for `id` at `frame`, the part of the window's whole strip frame
     /// `window` (`frame` when nil) to show, both in Quartz coordinates (top-left origin).
@@ -19,15 +30,29 @@ final class SlotGhosts {
         let isNew = panels[id] == nil
         let panel = panels[id] ?? spare.popLast() ?? Self.makePanel()
         panels[id] = panel
+        if isNew { Self.users[id, default: 0] += 1 }
         panel.alphaValue = 1
         panel.setFrame(Self.cocoaRect(frame), display: false)
         let window = window ?? frame
-        if let layer = panel.contentView?.layer, window.width > 0 {
-            layer.contents = snapshots[id]
-            layer.contentsRect = CGRect(x: (frame.minX - window.minX) / window.width, y: 0,
-                                        width: frame.width / window.width, height: 1)
+        if let block = Self.block(of: panel), window.width > 0, window.height > 0 {
+            // Each side where the window continues past `frame` overflows the panel.
+            let left = min(Self.overflow, frame.minX - window.minX)
+            let right = min(Self.overflow, window.maxX - frame.maxX)
+            let top = min(Self.overflow, frame.minY - window.minY)
+            let bottom = min(Self.overflow, window.maxY - frame.maxY)
+            let shown = CGRect(x: frame.minX - max(0, left), y: frame.minY - max(0, top),
+                               width: frame.width + max(0, left) + max(0, right),
+                               height: frame.height + max(0, top) + max(0, bottom))
+            // Cocoa view coordinates: y grows upward, so the bottom overflow sits below zero.
+            block.frame = CGRect(x: -max(0, left), y: -max(0, bottom), width: shown.width, height: shown.height)
+            block.layer?.contents = Self.snapshots[id]
+            block.layer?.contentsRect = CGRect(x: (shown.minX - window.minX) / window.width,
+                                               y: (window.maxY - shown.maxY) / window.height,
+                                               width: shown.width / window.width,
+                                               height: shown.height / window.height)
         }
         if !panel.isVisible { panel.orderFrontRegardless() }
+        // A cached image shows at once; a fresh capture replaces it.
         if isNew { capture(id) }
     }
 
@@ -39,8 +64,10 @@ final class SlotGhosts {
 
     /// Fades the ghosts of `ids` out. A fading panel is reused only after its fade completes.
     func hide(_ ids: [CGWindowID]) {
-        let fading = ids.compactMap { panels.removeValue(forKey: $0) }
+        let hidden = ids.filter { panels[$0] != nil }
+        let fading = hidden.compactMap { panels.removeValue(forKey: $0) }
         guard !fading.isEmpty else { return }
+        hidden.forEach(Self.release)
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.15
             for panel in fading { panel.animator().alphaValue = 0 }
@@ -48,8 +75,16 @@ final class SlotGhosts {
             guard let self else { return }
             for panel in fading { panel.orderOut(nil) }
             spare.append(contentsOf: fading)
-            for id in ids where panels[id] == nil { snapshots[id] = nil }
         })
+    }
+
+    private static func release(_ id: CGWindowID) {
+        users[id, default: 1] -= 1
+        guard users[id] == 0 else { return }
+        users[id] = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + snapshotGrace) {
+            if users[id] == nil { snapshots[id] = nil }
+        }
     }
 
     /// Captures `id`'s window into its ghost. Fails, leaving the plain fill, until Screen Recording
@@ -79,9 +114,9 @@ final class SlotGhosts {
             let ms = (DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds) / 1_000_000
             RibbonLog.log("ghost capture wid=\(id) \(image == nil ? "failed \(error.map { "\($0)" } ?? "no window")" : "ok") \(ms)ms",
                           category: "slide")
-            guard let image, let panel = self.panels[id] else { return }
-            self.snapshots[id] = image
-            panel.contentView?.layer?.contents = image
+            guard let image, Self.users[id] != nil else { return }
+            Self.snapshots[id] = image
+            if let panel = self.panels[id] { Self.block(of: panel)?.layer?.contents = image }
         }
     }
 
@@ -101,6 +136,8 @@ final class SlotGhosts {
         panel.isReleasedWhenClosed = false
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .stationary, .ignoresCycle, .fullScreenAuxiliary]
+        let container = NSView()
+        container.wantsLayer = true
         let block = NSView()
         block.wantsLayer = true
         block.layer?.backgroundColor = NSColor(white: 0, alpha: 0.95).cgColor
@@ -109,7 +146,12 @@ final class SlotGhosts {
         block.layer?.cornerRadius = 10
         block.layer?.masksToBounds = true
         block.layer?.contentsGravity = .resize
-        panel.contentView = block
+        container.addSubview(block)
+        panel.contentView = container
         return panel
+    }
+
+    private static func block(of panel: NSPanel) -> NSView? {
+        panel.contentView?.subviews.first
     }
 }
