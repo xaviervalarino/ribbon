@@ -50,7 +50,7 @@ Replaces the resize-based overview: an overlay shows window captures in a Missio
 - **`overview mission-control` is dropped**: it existed because Mission Control on the raw strip was too zoomed out, which the grid solves.
 - **Captures keep about twice the grid cell's pixel size**: a few MB per window, sharp in the grid, slightly soft at the start of the zoom. Upgrade path: full resolution (~15–20MB per Retina window) if the zoom looks soft.
 - **Adopted defaults (round 5):** Ctrl+M again closes like Esc; a Space or display change closes the grid; stacked columns split their cell as the resize overview does; the key tap lives only while the grid is up and dies with the daemon.
-- **Unverified, probe first:** whether a desktop-independent-window capture of a parked window (1pt sliver on screen) returns the whole window. `SLSHWCaptureWindowList` returns only the on-screen clip.
+- **Parked windows capture whole** (`debug capture-probe`, 2026-11-05, 5 windows on a 1512pt display): a desktop-independent-window capture of a window parked at x=1511 (1pt on screen) returned the full 3016x1890 image with its content. One shared `SCShareableContent` fetch took 69ms; captures then took 30–119ms each. `SLSHWCaptureWindowList` still returns only the on-screen clip.
 - **Ponytail ultra fold (2026-11-04)** narrows the build:
   - The cache is the last capture per window, taken when the grid opens and shown at once on the next open; no focus-loss or slide-settle triggers. The first open shows placeholder blocks until captures land. Background refresh returns only if the parked-window probe fails.
   - One `SCShareableContent` fetch per open, shared by every capture (each ghost capture refetches today, `SlotGhosts.swift:59`).
