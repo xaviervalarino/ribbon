@@ -126,8 +126,8 @@ public final class WindowManager {
         }
         let driver = AppDriver(
             pid: pid,
-            onMinHeight: { [weak self] id, height in
-                DispatchQueue.main.async { self?.recordMinHeight(height, forWindowID: id) }
+            onMinSize: { [weak self] id, width, height in
+                DispatchQueue.main.async { self?.recordMinSize(width: width, height: height, forWindowID: id) }
             },
             onWriteFailed: { [weak self] id, frame, error in
                 DispatchQueue.main.async { self?.writeFailed(id: id, frame: frame, error: error) }
@@ -137,9 +137,9 @@ public final class WindowManager {
         return driver
     }
 
-    func recordMinHeight(_ height: Double, forWindowID id: CGWindowID) {
-        for sID in ribbons.keys where ribbons[sID]?.raiseMinHeight(height, forWindowID: id) == true {
-            RibbonLog.log("min height wid=\(id) \(Int(height))", category: "layout")
+    func recordMinSize(width: Double?, height: Double?, forWindowID id: CGWindowID) {
+        for sID in ribbons.keys where ribbons[sID]?.raiseMinSize(width: width, height: height, forWindowID: id) == true {
+            RibbonLog.log("min size wid=\(id) width=\(width.map { "\(Int($0))" } ?? "-") height=\(height.map { "\(Int($0))" } ?? "-")", category: "layout")
             lastAppliedFrames.removeValue(forKey: id)
             scheduleRetile()
         }

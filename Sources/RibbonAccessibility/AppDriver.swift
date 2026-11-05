@@ -105,17 +105,18 @@ public actor AppDriver {
     private var pendingMutations: [CGWindowID: WindowMutation] = [:]
     private var lastAppliedSizes: [CGWindowID: CGSize] = [:]
     private var isDraining: Bool = false
-    /// Called with a window's live height when it stays taller than a resize asked for.
-    private let onMinHeight: ((CGWindowID, Double) -> Void)?
+    /// Called with a window's live width and height, each only when the window stays larger than
+    /// a resize asked for in that dimension.
+    private let onMinSize: ((CGWindowID, Double?, Double?) -> Void)?
     private let onWriteFailed: ((CGWindowID, CGRect, AXError) -> Void)?
 
     public init(
         pid: pid_t,
-        onMinHeight: ((CGWindowID, Double) -> Void)? = nil,
+        onMinSize: ((CGWindowID, Double?, Double?) -> Void)? = nil,
         onWriteFailed: ((CGWindowID, CGRect, AXError) -> Void)? = nil
     ) {
         self.pid = pid
-        self.onMinHeight = onMinHeight
+        self.onMinSize = onMinSize
         self.onWriteFailed = onWriteFailed
     }
 
@@ -197,9 +198,13 @@ public actor AppDriver {
                         "AX frame applied wid=\(winID) pid=\(pid) target=\(mutation.frame.integral)",
                         category: "layout"
                     )
-                    // Apps hold windows at their minimum height; the layout makes room once it knows it.
-                    if let live = mutation.element.size, live.height >= mutation.frame.height + 2 {
-                        onMinHeight?(winID, live.height)
+                    // Apps hold windows at their minimum size; the layout makes room once it knows it.
+                    // Terminals round widths to a character cell, so a width counts as a minimum
+                    // only past 16pt over the request.
+                    if let live = mutation.element.size {
+                        let minWidth = live.width >= mutation.frame.width + 16 ? Double(live.width) : nil
+                        let minHeight = live.height >= mutation.frame.height + 2 ? Double(live.height) : nil
+                        if minWidth != nil || minHeight != nil { onMinSize?(winID, minWidth, minHeight) }
                     }
                 }
             } else {

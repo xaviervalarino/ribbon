@@ -205,6 +205,7 @@ extension WindowManager {
             appName: app?.localizedName ?? oldModel?.appName ?? ""
         )
         model.minHeight = oldModel?.minHeight
+        model.minWidth = oldModel?.minWidth
         guard r.replaceWindow(id: old, with: model) else { return false }
         if new == focus {
             r.focus(windowID: new)

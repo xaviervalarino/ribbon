@@ -163,13 +163,17 @@ public struct Ribbon: Sendable, Codable {
         }
     }
 
-    /// Raises the window's minimum height; returns false when it is not in this ribbon or already that high.
+    /// Raises the window's minimum width and height; returns false when it is not in this ribbon
+    /// or neither minimum grows.
     @discardableResult
-    public mutating func raiseMinHeight(_ height: Double, forWindowID id: CGWindowID) -> Bool {
+    public mutating func raiseMinSize(width: Double?, height: Double?, forWindowID id: CGWindowID) -> Bool {
         for cIdx in columns.indices {
             guard let wIdx = columns[cIdx].windows.firstIndex(where: { $0.id == id }) else { continue }
-            guard height > (columns[cIdx].windows[wIdx].minHeight ?? 0) else { return false }
-            columns[cIdx].windows[wIdx].minHeight = height
+            var window = columns[cIdx].windows[wIdx]
+            if let width, width > (window.minWidth ?? 0) { window.minWidth = width }
+            if let height, height > (window.minHeight ?? 0) { window.minHeight = height }
+            guard window != columns[cIdx].windows[wIdx] else { return false }
+            columns[cIdx].windows[wIdx] = window
             return true
         }
         return false

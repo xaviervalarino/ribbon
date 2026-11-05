@@ -164,18 +164,19 @@ public struct LayoutEngine: Sendable {
             let col = ribbon.columns[0]
             let effectiveRatio = col.hasExplicitSingleWidth ? col.widthRatio : 1.0
             let width = (effectiveRatio >= 0.999) ? canvasWidth : floor(min(canvasWidth, effectiveRatio * canvasWidth))
-            return [(x: 0.0, width: width)]
+            return [(x: 0.0, width: max(width, col.minWidth))]
         }
 
         var currentX = 0.0
         for col in ribbon.columns {
-            let width: Double
+            let ratioWidth: Double
             if col.widthRatio >= 0.999 {
-                width = canvasWidth
+                ratioWidth = canvasWidth
             } else {
                 let rawWidth = col.widthRatio * (canvasWidth + config.windowGap) - config.windowGap
-                width = floor(max(50.0, min(canvasWidth, rawWidth)))
+                ratioWidth = floor(max(50.0, min(canvasWidth, rawWidth)))
             }
+            let width = max(ratioWidth, col.minWidth)
             result.append((x: currentX, width: width))
             currentX += width + config.windowGap
         }
