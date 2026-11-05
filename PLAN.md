@@ -12,7 +12,7 @@ A native macOS scrollable tiling window manager (Niri/PaperWM-style 1D column st
 
 ### Settled decisions (grill rounds 1–2, 2026-09-12)
 - **Scroll model**: minimal-scroll (Niri default) — viewport moves only enough to bring the focused column into view. Requires an explicit viewport-offset field on `Ribbon` (today the layout always centers the active column).
-- **Floating**: auto-float only in v1 — strict admission filter (role `AXWindow`, subrole standard; dialogs/palettes/PiP never enter the ribbon and are left untouched). Manual `float` toggle deferred to v1.5.
+- **Floating**: auto-float only in v1 — strict admission filter (role `AXWindow`, subrole standard; dialogs/palettes/PiP never enter the ribbon and are left untouched). Manual `float` toggle deferred to v1.5 (pulled into F.3, round 6).
 - **Config**: hardcoded `Config.default` for MVP. File format (TOML preferred, JSON fallback) deferred until the daemon works — blocked on the broken SPM toolchain anyway.
 - **Workspaces**: none built-in. v1 is **FlashSpace-compatible**: observe `NSWorkspace` didHide/didUnhide/didActivate, exclude hidden apps' windows from the ribbon, gate AX moves on `app.isHidden == false`. Native hide/show workspace switching is a possible v2.
 - **AX layer**: keep our own thin wrapper (AXSwift is MIT but SPM is broken); port its patterns instead.
@@ -59,6 +59,17 @@ Replaces the resize-based overview: an overlay shows window captures in a Missio
   - Cell frames come from `LayoutEngine.computePlan` on a copy of the ribbon with `isOverview = true`, so stacked columns split their cell as today. The real ribbon never enters overview for the grid, and grid `focus` commands move the highlight without retiling.
   - The key-grab tap is the last step, built on `m2/integration` (the input tap lives on `m2/gestures`); until then Caps+W+hjkl moves the highlight and Caps+W+M toggles.
   - The resize overview stays reachable as `overview resize`, its code untouched. `overview mission-control` and `mission-control` are removed.
+
+### Settled decisions (grill round 6, 2026-11-05): floating windows (F.3)
+- **Cause of "under and over":** ribbon's only z-order tools are `AXRaise` and `activate()` (`AXElement.swift:202`, `WindowManager+Commands.swift:22`); `SkyLightBridge` wraps move and update calls only. A float's z follows app focus, so strip windows cover it and it covers them. Window levels of Rex Settings and UTM not yet read live.
+- **Floats stay above the strip, spike first.** After a strip focus change, ribbon re-raises visible floats (niri model: [floats always render above tiled windows and do not scroll](https://niri-wm.github.io/niri/Floating-Windows.html)). A live spike proves `AXRaise` orders across apps without stealing focus. If the spike fails, floats keep z by focus and the item closes. *Why:* with a manual toggle, z by focus buries every window the user floats. This amends the round 1 z-order rule ("raise only the focused window").
+- **Manual `ribbon float` toggle moves from v1.5 into F.3.** Needs tracked-float state in the model (`WindowModel.isFloating` is unused today). *Why:* the user wants to float any window on demand.
+- **On-top set:** manual floats, auto-floats without a fullscreen button (Rex Settings, inspectors) and apps on a new `floatApps` list (UTM only). Dialogs, sheets and palettes stay out: macOS stacks them above their parent. *Why:* only the first two kinds are windows the user parks beside the strip.
+- **`floatApps` is separate from `ignoredApps`:** an ignored app is never touched; a float app is never moved or resized but is raised and cycled. Only standard `AXWindow` windows count, so Raycast panels and the `borders` overlay stay out. *Why:* treating all of `ignoredApps` as floats would raise Finder, System Settings and Activity Monitor over the strip. The user leaned 1 over 2, unsure of the trade-offs, and deferred to the recommendation.
+- **`ribbon focus-float`:** cycles the on-top floats, then returns to the last strip window (niri's switch-focus-between-floating-and-tiling). Needs a tracked float list.
+- **Directional keys stay on the strip:** `focus-float` is the only way to reach floats by keyboard. Niri lets the directional binds act on floats once the floating layer has focus; revisit after F.3d if cycling feels slow. *Why:* the user judged `focus-float` good enough for now.
+- **Adopted defaults:** floating a window keeps its frame and closes its strip gap; un-floating re-enters right of the active column at default width; ribbon never moves a float; float state is in-memory; only floats on screen are re-raised after a Space or display change.
+- **Prior art:** niri (separate floating layer, `toggle-window-floating`), PaperWM scratch layer ([toggle floating/tiled, per-app rules](https://github.com/PaperWM-community/PaperWM)), AeroSpace ([floats windows without a fullscreen button, `layout floating` rules](https://nikitabobko.github.io/AeroSpace/guide.html)). yabai's `--layer` needs its scripting addition (SIP partly off); not an option.
 
 **Build sequence (m2/screenshot-grid unless noted):**
 0. Probe: `debug capture-probe` in `DebugProbes.swift` captures every strip window once, writes each image to `/tmp/ribbon-capture-probe/<wid>.png` with window size, image size, parked state and timings (one shared fetch vs each capture). Read-only; the user restarts and runs it.
@@ -215,7 +226,11 @@ Job specs with exact files, text and verification live in `.claude/plans/milesto
 - [ ] E.1 Three-finger stepping swipe native (touch-data probe first). E.2 `modifier caps down|up`. E.3 Caps + mouse pan with dead zone and snap. E.4 Three-finger follow experiment. `[live]` each.
 - [ ] F.1 Throw (`move-to-display`): focus does not follow the thrown window. In the 2026-11-05 19:07:25 throw (`/tmp/ribbon-501.log`), Zen activated 100ms after the command and ribbon's focus of Herdr 17ms later did not take; Herdr was focused only by a click at 19:07:31.7. Candidate fix: focus the thrown window again once its move settles. Needs two displays to reproduce. `[live]`
 - [ ] F.2 Throw: the user saw the thrown window land over the target strip's windows without them moving. The 19:07:25 log shows the target retile applied at once; a retile with no command at 19:07:30.9 wrote Herdr to x=-766 on the built-in display, then focus put it back. Reproduce with the log open before changing anything. `[live]`
-- [ ] F.3 Floating windows feel odd (user, 2026-11-05): they stay pinned while the strip scrolls under and over them. Behavior not yet defined. Grill before building.
+- [ ] F.3 Floating windows (round 6). Staged, each step ships alone:
+  - F.3a `[live]` Spike: after a strip focus change, `AXRaise` a float of another app; check it orders above the strip window without stealing focus or tripping focus echoes. Read the Rex Settings and UTM window levels first (`debug inspect`). Fail = close F.3 at z by focus.
+  - F.3b `ribbon float` toggle: tracked float state in the model (`isFloating`), column leaves and re-enters the strip, floats re-raised on strip focus change, no-fullscreen-button auto-floats join the on-top set.
+  - F.3c `floatApps` config list (UTM) joins the on-top set, never moved or resized.
+  - F.3d `ribbon focus-float` cycle.
 - [ ] F.5 Ghost images warped: a cached image captured at another window size stretched under `contentsGravity = .resize` (user, 2026-11-05). Now `.resizeAspectFill`; live-test with F.6.
 - [ ] F.6 Live-test `8f3c31b` (ghost cache races, hand resizes under 16pt) before main.
 - [ ] F.4 Send Rex Beta feedback: give the settings window a panel subrole (`AXDialog` or `AXFloatingWindow`), and answer AX reads faster while opening a window (ribbon's `AXWindowCreated` handler stalled 1242ms on Rex at 19:45:33).
