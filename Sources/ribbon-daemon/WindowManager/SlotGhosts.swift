@@ -120,6 +120,41 @@ final class SlotGhosts {
         }
     }
 
+    /// Windows waiting for `warm`'s next batch.
+    private static var toWarm: Set<CGWindowID> = []
+
+    /// Captures `id` at quarter size within a second, unless it already has an image, so its first
+    /// ghost never starts empty. Calls inside that second share one capture batch.
+    static func warm(_ id: CGWindowID) {
+        let isFirst = toWarm.isEmpty
+        toWarm.insert(id)
+        guard isFirst else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+            let ids = toWarm.filter { snapshots[$0] == nil }
+            toWarm = []
+            guard #available(macOS 14, *), !ids.isEmpty else { return }
+            SCShareableContent.getExcludingDesktopWindows(false, onScreenWindowsOnly: false) { content, _ in
+                for window in content?.windows ?? [] where ids.contains(window.windowID) {
+                    let filter = SCContentFilter(desktopIndependentWindow: window)
+                    let config = SCStreamConfiguration()
+                    config.width = max(1, Int(window.frame.width * CGFloat(filter.pointPixelScale)) / 4)
+                    config.height = max(1, Int(window.frame.height * CGFloat(filter.pointPixelScale)) / 4)
+                    config.showsCursor = false
+                    config.ignoreShadowsSingleWindow = true
+                    SCScreenshotManager.captureImage(contentFilter: filter, configuration: config) { image, _ in
+                        guard let image else { return }
+                        DispatchQueue.main.async {
+                            // A ghost's own capture is sharper.
+                            guard snapshots[window.windowID] == nil else { return }
+                            snapshots[window.windowID] = image
+                            shrunk.insert(window.windowID)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// Drops `id`'s image; call once its window is gone.
     static func forget(_ id: CGWindowID) {
         snapshots[id] = nil

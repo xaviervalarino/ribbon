@@ -261,6 +261,7 @@ extension WindowManager {
 
         observer.observeWindow(element: win, pid: pid)
         adoptedSinceLastSweep.insert(id)
+        SlotGhosts.warm(id)
         return sID
     }
 
