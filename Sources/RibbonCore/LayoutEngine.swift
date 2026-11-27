@@ -219,6 +219,28 @@ public struct LayoutEngine: Sendable {
         return geometry.indices.reduce(active) { visibleWidth($1) > visibleWidth($0) ? $1 : $0 }
     }
 
+    /// Where a released scrub settles, as niri snaps a view gesture: of every column's left-aligned
+    /// and right-aligned offset, clamped to the strip, the one nearest `projectedOffset`. Returns
+    /// that column, to focus, and the offset. Clamping gives columns near the strip's ends the same
+    /// offset; the column nearest the projected canvas center wins those ties.
+    public static func swipeSnap(
+        geometry: [(x: Double, width: Double)],
+        projectedOffset: Double,
+        canvasWidth: Double
+    ) -> (column: Int, offset: Double)? {
+        guard let last = geometry.last else { return nil }
+        let maxOffset = max(0, last.x + last.width - canvasWidth)
+        let candidates = geometry.enumerated().flatMap { index, column in
+            [column.x, column.x + column.width - canvasWidth].map { (column: index, offset: floor(max(0, min($0, maxOffset)))) }
+        }
+        let projectedCenter = projectedOffset + canvasWidth / 2
+        func rank(_ candidate: (column: Int, offset: Double)) -> (Double, Double) {
+            let column = geometry[candidate.column]
+            return (abs(candidate.offset - projectedOffset), abs(column.x + column.width / 2 - projectedCenter))
+        }
+        return candidates.min { rank($0) < rank($1) }
+    }
+
     /// Scrolls just enough to show the active column, then further when a column would sit half or
     /// more past a shared display edge, so that edge falls between columns. Past the strip's end
     /// that leaves empty canvas.

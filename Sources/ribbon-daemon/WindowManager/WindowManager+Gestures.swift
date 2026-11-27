@@ -59,6 +59,7 @@ extension WindowManager {
         // A recreated tap may have missed the lift that ended the last gesture.
         lastTouch = nil
         swipeStepper = SwipeStepper()
+        if panController.isScrubbing { panController.endPan(snap: true) }
         if config.swipeFingers > 0 || touchesProbe.isArmed {
             gestureTap.start()
         } else {
@@ -89,8 +90,12 @@ extension WindowManager {
             touchesProbe.maxTouches = max(touchesProbe.maxTouches, count)
         }
 
-        guard config.swipeFingers > 0,
-              let step = swipeStepper.feed(fingers: count, dx: travel.dx, dy: travel.dy, config: config) else { return }
+        guard config.swipeFingers > 0 else { return }
+        if config.swipeMode == .follow {
+            scrub(fingers: count, travel: travel, time: nsEvent.timestamp)
+            return
+        }
+        guard let step = swipeStepper.feed(fingers: count, dx: travel.dx, dy: travel.dy, config: config) else { return }
         // Overview, the screenshot grid and a caps pan move focus their own way; their edges run nothing.
         let ribbon = ribbons[currentActiveSpaceID()] ?? Ribbon()
         let atEdge = ribbon.isAtEdge(step.direction)
@@ -106,6 +111,18 @@ extension WindowManager {
             if atEdge && config.swipeEdgeSteps > 0 {
                 RibbonLog.log("swipe edge push: \(step.direction)", category: "input")
             }
+        }
+    }
+
+    private func scrub(fingers: Int, travel: CGVector, time: Double) {
+        switch swipeStepper.feedScrub(fingers: fingers, dx: travel.dx, dy: travel.dy, config: config) {
+        case .move(let fraction):
+            guard !screenshotGrid.isOpen else { return }
+            panController.scrub(fraction: fraction, time: time)
+        case .end:
+            panController.liftScrub(time: time)
+        case nil:
+            break
         }
     }
 

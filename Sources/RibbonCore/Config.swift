@@ -23,6 +23,12 @@ public enum FocusTiming: String, Sendable, Codable {
     case end
 }
 
+/// What a three-finger horizontal swipe does: step focus a column at a time, or scrub the strip
+/// with the fingers and settle on a column when they lift.
+public enum SwipeMode: String, Sendable, Codable {
+    case step, follow
+}
+
 public struct Config: Sendable, Codable {
     public var windowGap: Double
     public var edgeMargin: Double
@@ -51,6 +57,9 @@ public struct Config: Sendable, Codable {
     public var swipeFirst: Double
     public var swipeStep: Double
     public var swipeReverse: Double
+    public var swipeMode: SwipeMode
+    /// Canvas widths a scrub moves the strip per full trackpad width of finger travel.
+    public var swipeFollowScale: Double
     /// Swipe steps past the strip's edge, in a row in one gesture, that run the edge command; 0 turns
     /// edge commands off.
     public var swipeEdgeSteps: Int
@@ -103,6 +112,8 @@ public struct Config: Sendable, Codable {
         swipeFirst: Double = 0.03,
         swipeStep: Double = 0.15,
         swipeReverse: Double = 0.04,
+        swipeMode: SwipeMode = .step,
+        swipeFollowScale: Double = 1.5,
         swipeEdgeSteps: Int = 2,
         swipeLeftEdgeCommand: [String] = ["/Applications/InstantSpaceSwitcher.app/Contents/MacOS/ISSCli", "left"],
         swipeRightEdgeCommand: [String] = ["/Applications/InstantSpaceSwitcher.app/Contents/MacOS/ISSCli", "right"],
@@ -127,6 +138,8 @@ public struct Config: Sendable, Codable {
         self.swipeFirst = swipeFirst
         self.swipeStep = swipeStep
         self.swipeReverse = swipeReverse
+        self.swipeMode = swipeMode
+        self.swipeFollowScale = swipeFollowScale
         self.swipeEdgeSteps = swipeEdgeSteps
         self.swipeLeftEdgeCommand = swipeLeftEdgeCommand
         self.swipeRightEdgeCommand = swipeRightEdgeCommand

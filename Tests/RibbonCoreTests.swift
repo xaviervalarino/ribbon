@@ -658,6 +658,64 @@ func runTests() {
     TestRunner.assertEqual(offStepper.resolve(.focusLeft, atEdge: true, config: Config(swipeEdgeSteps: 0)), nil, "swipeEdgeSteps 0 never fires")
     TestRunner.assertEqual(offStepper.resolve(.focusLeft, atEdge: true, config: Config(swipeEdgeSteps: 0)), nil, "swipeEdgeSteps 0 never fires on later pushes")
 
+    // 18c. Scrub feed: axis lock, moves, lift, cancel
+    var scrubber = SwipeStepper()
+    TestRunner.assertEqual(scrubber.feedScrub(fingers: 3, dx: -0.06, dy: 0, config: config), nil, "Under the 0.03 lock a scrub does not move")
+    TestRunner.assertEqual(scrubber.feedScrub(fingers: 3, dx: -0.03, dy: 0, config: config), .move(-0.03), "The lock event moves by all travel so far")
+    TestRunner.assertEqual(scrubber.feedScrub(fingers: 3, dx: 0.06, dy: 0, config: config), .move(0.02), "Later events move by their own per-finger travel, reversals included")
+    TestRunner.assertEqual(scrubber.feedScrub(fingers: 3, dx: 0, dy: 0.3, config: config), nil, "An event with no horizontal travel moves nothing")
+    TestRunner.assertEqual(scrubber.feedScrub(fingers: 2, dx: 0, dy: 0, config: config), .end, "Lifting a finger ends the scrub")
+    TestRunner.assertEqual(scrubber.feedScrub(fingers: 0, dx: 0, dy: 0, config: config), nil, "The scrub ends once")
+
+    var verticalScrubber = SwipeStepper()
+    TestRunner.assertEqual(verticalScrubber.feedScrub(fingers: 3, dx: 0, dy: 0.09, config: config), nil, "A vertical lock leaves the gesture to Mission Control")
+    TestRunner.assertEqual(verticalScrubber.feedScrub(fingers: 3, dx: -0.6, dy: 0, config: config), nil, "A vertical lock never scrubs")
+    TestRunner.assertEqual(verticalScrubber.feedScrub(fingers: 0, dx: 0, dy: 0, config: config), nil, "Lifting a vertical gesture ends no scrub")
+
+    var cancelledScrubber = SwipeStepper()
+    _ = cancelledScrubber.feedScrub(fingers: 3, dx: -0.09, dy: 0, config: config)
+    cancelledScrubber.cancel()
+    TestRunner.assertEqual(cancelledScrubber.feedScrub(fingers: 3, dx: -0.09, dy: 0, config: config), nil, "A cancelled scrub moves nothing")
+    TestRunner.assertEqual(cancelledScrubber.feedScrub(fingers: 0, dx: 0, dy: 0, config: config), nil, "A cancelled scrub ends without .end")
+    TestRunner.assertEqual(cancelledScrubber.feedScrub(fingers: 3, dx: 0.09, dy: 0, config: config), .move(0.03), "The next gesture scrubs again")
+
+    // 18d. Swipe tracker velocity and glide
+    var tracker = SwipeTracker()
+    TestRunner.assertEqual(tracker.velocity, 0, "No samples, no velocity")
+    tracker.push(delta: 10, time: 1.00)
+    tracker.push(delta: 10, time: 1.05)
+    tracker.push(delta: 10, time: 1.10)
+    TestRunner.assertEqual(Int(tracker.velocity.rounded()), 200, "Velocity counts travel after the first sample over the history's time")
+    TestRunner.assertEqual(Int(tracker.glide.rounded()), 67, "The glide runs about a third of a second of velocity")
+    tracker.push(delta: 500, time: 1.00)
+    TestRunner.assertEqual(Int(tracker.velocity.rounded()), 200, "A sample older than the last is dropped")
+    tracker.push(delta: 0, time: 2.00)
+    TestRunner.assertEqual(tracker.velocity, 0, "A pause longer than 150ms leaves no velocity")
+    var lockTracker = SwipeTracker()
+    lockTracker.push(delta: 67, time: 1.000)
+    lockTracker.push(delta: 1, time: 1.008)
+    TestRunner.assertEqual(Int(lockTracker.velocity.rounded()), 125, "Travel up to the axis lock does not count toward velocity")
+
+    // 18e. Scrub snap: nearest column-aligned offset, clamped to the strip
+    let snapGeometry: [(x: Double, width: Double)] = [(x: 0, width: 800), (x: 810, width: 800), (x: 1620, width: 800)]
+    TestRunner.assertTrue(LayoutEngine.swipeSnap(geometry: [], projectedOffset: 0, canvasWidth: 1000) == nil, "An empty strip has no snap")
+    let leftSnap = LayoutEngine.swipeSnap(geometry: snapGeometry, projectedOffset: 790, canvasWidth: 1000)
+    TestRunner.assertTrue(leftSnap?.column == 1 && leftSnap?.offset == 810, "Near a column's left edge, that column left-aligns")
+    let rightSnap = LayoutEngine.swipeSnap(geometry: snapGeometry, projectedOffset: 640, canvasWidth: 1000)
+    TestRunner.assertTrue(rightSnap?.column == 1 && rightSnap?.offset == 610, "Near a column's right-aligned offset, that column right-aligns")
+    let farSnap = LayoutEngine.swipeSnap(geometry: snapGeometry, projectedOffset: 5000, canvasWidth: 1000)
+    TestRunner.assertTrue(farSnap?.offset == 1420, "A glide past the end clamps to the strip's end")
+    let backSnap = LayoutEngine.swipeSnap(geometry: snapGeometry, projectedOffset: -400, canvasWidth: 1000)
+    TestRunner.assertTrue(backSnap?.column == 0 && backSnap?.offset == 0, "A glide past the start settles on the first column")
+    let tieGeometry: [(x: Double, width: Double)] = [(x: 0, width: 800), (x: 810, width: 400), (x: 1220, width: 400)]
+    TestRunner.assertTrue(LayoutEngine.swipeSnap(geometry: tieGeometry, projectedOffset: 5000, canvasWidth: 1000)?.column == 2,
+                          "Columns clamped to the end offset tie; a fling to the end focuses the last column")
+    let fitGeometry: [(x: Double, width: Double)] = [(x: 0, width: 300), (x: 310, width: 300), (x: 620, width: 300)]
+    TestRunner.assertTrue(LayoutEngine.swipeSnap(geometry: fitGeometry, projectedOffset: 400, canvasWidth: 1000)?.column == 2,
+                          "On a strip that fits, a scrub toward the right focuses a right column")
+    TestRunner.assertTrue(LayoutEngine.swipeSnap(geometry: fitGeometry, projectedOffset: -400, canvasWidth: 1000)?.column == 0,
+                          "On a strip that fits, a scrub toward the left focuses the first column")
+
     // 19. A released pan focuses a fully visible column so the strip stays put
     let panGeometry: [(x: Double, width: Double)] = [(x: 0, width: 750), (x: 760, width: 1200), (x: 1970, width: 1200)]
     TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 0, canvasWidth: 1500, activeIndex: 1), 0,

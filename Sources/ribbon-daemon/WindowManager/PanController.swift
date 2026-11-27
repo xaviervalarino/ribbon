@@ -1,9 +1,10 @@
 import Foundation
 import CoreGraphics
 
-/// Pans the active Space's strip horizontally while a pan is held (`pan begin` to `pan end`),
-/// flushing position updates at most every 8ms and snapping to the column
-/// `LayoutEngine.panSnapColumn` picks when the hold ends.
+/// Pans the active Space's strip horizontally while a pan is held (`pan begin` to `pan end`), or
+/// while three fingers scrub the trackpad, flushing position updates at most every 8ms. A released
+/// hold snaps to the column `LayoutEngine.panSnapColumn` picks; a lifted scrub glides on its
+/// velocity and snaps to the column edge `LayoutEngine.swipeSnap` picks.
 final class PanController {
     /// Pointer travel below this many points pans nothing, so key chords with a resting hand stay still.
     private static let deadZone: Double = 40
@@ -25,6 +26,9 @@ final class PanController {
     private var needsFlush = false
     private var flushCount = 0
     private var flushTimer: DispatchSourceTimer?
+    /// Tracks a trackpad scrub from its first motion until the pan ends; nil for a caps hold.
+    private var scrubTracker: SwipeTracker?
+    var isScrubbing: Bool { scrubTracker != nil }
 
     init(windowManager: WindowManager) {
         self.windowManager = windowManager
@@ -37,6 +41,8 @@ final class PanController {
             orphanEndAt = nil
             return
         }
+        // Caps takes the strip over from a scrub, from where the fingers left it.
+        if isScrubbing { endPan(snap: false) }
         heldSince = .now()
         if !isPanning {
             accumulatedDX = 0
@@ -57,7 +63,7 @@ final class PanController {
     }
 
     func handleMotion(dx: Double) {
-        guard !expireHoldIfNeeded(), dx != 0, let wm = windowManager else { return }
+        guard scrubTracker == nil, !expireHoldIfNeeded(), dx != 0 else { return }
         let now = DispatchTime.now()
         if !isPanning, now.uptimeNanoseconds - lastMotionTime.uptimeNanoseconds >= Self.idleTimeoutNs {
             accumulatedDX = 0
@@ -65,7 +71,32 @@ final class PanController {
         lastMotionTime = now
         accumulatedDX += dx
         guard abs(accumulatedDX) >= Self.deadZone else { return }
+        applyPan(dx: dx)
+    }
 
+    /// Moves the strip by `fraction` of the trackpad's width of finger travel at `time` (seconds,
+    /// monotonic). Ignored while a caps hold is on.
+    func scrub(fraction: Double, time: Double) {
+        guard heldSince == nil, let wm = windowManager,
+              let canvasWidth = wm.canvasWidth(forSpace: panningSpaceID ?? wm.currentActiveSpaceID()) else { return }
+        let dx = fraction * wm.config.swipeFollowScale * canvasWidth
+        applyPan(dx: dx)
+        guard isPanning else { return }
+        lastMotionTime = .now()
+        if scrubTracker == nil { scrubTracker = SwipeTracker() }
+        scrubTracker?.push(delta: dx, time: time)
+    }
+
+    /// Ends a scrub when its fingers lift at `time`, with its glide and column snap.
+    func liftScrub(time: Double) {
+        guard isScrubbing else { return }
+        // A pause before the lift leaves no velocity: samples older than the history drop out.
+        scrubTracker?.push(delta: 0, time: time)
+        endPan(snap: true)
+    }
+
+    private func applyPan(dx: Double) {
+        guard let wm = windowManager else { return }
         let sID = panningSpaceID ?? wm.currentActiveSpaceID()
         if !isPanning, let columns = wm.ribbons[sID]?.columns {
             // Cancelling replays deferred AX events, which edit the ribbon, so it runs before the
@@ -96,6 +127,11 @@ final class PanController {
     }
 
     func endPan(snap: Bool) {
+        let scrub = scrubTracker
+        scrubTracker = nil
+        // A scrub ended by anything but its lift (a command, a click, a Space change, caps) ignores
+        // the rest of its gesture.
+        if scrub != nil && !snap { windowManager?.swipeStepper.cancel() }
         accumulatedDX = 0
         needsFlush = false
         stopFlushTimer()
@@ -112,13 +148,24 @@ final class PanController {
         var targetWindowID: CGWindowID?
         if let canvasWidth = wm.canvasWidth(forSpace: sID) {
             let geometry = LayoutEngine.columnGeometry(for: r, canvasWidth: canvasWidth, config: wm.config)
-            if let bestIndex = LayoutEngine.panSnapColumn(geometry: geometry, offset: r.viewportOffset,
-                                                          canvasWidth: canvasWidth, activeIndex: r.activeColumnIndex),
-               let winID = r.columns[bestIndex].activeWindow?.id, winID != r.activeWindow?.id {
+            let snapColumn: Int?
+            if let scrub {
+                // `dx` moves the offset the other way, so the glide subtracts.
+                let projected = r.viewportOffset - scrub.glide
+                let target = LayoutEngine.swipeSnap(geometry: geometry, projectedOffset: projected, canvasWidth: canvasWidth)
+                snapColumn = target?.column
+                r.viewportOffset = target?.offset ?? r.viewportOffset
+            } else {
+                snapColumn = LayoutEngine.panSnapColumn(geometry: geometry, offset: r.viewportOffset,
+                                                        canvasWidth: canvasWidth, activeIndex: r.activeColumnIndex)
+            }
+            if let snapColumn, let winID = r.columns[snapColumn].activeWindow?.id, winID != r.activeWindow?.id {
                 r.focus(windowID: winID)
                 targetWindowID = winID
             }
-            r.viewportOffset = LayoutEngine.panReleaseOffset(for: r, canvasWidth: canvasWidth, config: wm.config)
+            if scrub == nil {
+                r.viewportOffset = LayoutEngine.panReleaseOffset(for: r, canvasWidth: canvasWidth, config: wm.config)
+            }
             wm.ribbons[sID] = r
         }
 
@@ -156,8 +203,14 @@ final class PanController {
     }
 
     private func tick() {
-        guard !expireHoldIfNeeded(), isPanning, let wm = windowManager else {
+        guard scrubTracker != nil || !expireHoldIfNeeded(), isPanning, let wm = windowManager else {
             stopFlushTimer()
+            return
+        }
+        // A scrub whose lift never arrived (a dropped event) ends like an idle hold.
+        if isScrubbing, DispatchTime.now().uptimeNanoseconds - lastMotionTime.uptimeNanoseconds >= Self.holdTimeoutNs {
+            RibbonLog.log("scrub expired", category: "pan")
+            endPan(snap: true)
             return
         }
         if needsFlush {

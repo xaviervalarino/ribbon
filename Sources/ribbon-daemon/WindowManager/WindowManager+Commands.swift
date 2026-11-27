@@ -133,7 +133,7 @@ extension WindowManager {
 
     /// Live-tunes slide and swipe settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
-        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing|swipe-fingers|swipe-edge-steps <value>" }
+        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing|swipe-fingers|swipe-edge-steps|swipe-mode|swipe-follow-scale <value>" }
         let value = args[1].lowercased()
         switch args[0].lowercased() {
         case "resize-mode":
@@ -152,6 +152,14 @@ extension WindowManager {
         case "swipe-edge-steps":
             guard let steps = Int(value), steps >= 0 else { return "error: swipe-edge-steps <count, 0 turns edge commands off>" }
             config.swipeEdgeSteps = steps
+        case "swipe-mode":
+            guard let mode = SwipeMode(rawValue: value) else { return "error: swipe-mode step|follow" }
+            config.swipeMode = mode
+            swipeStepper = SwipeStepper()
+            if panController.isScrubbing { panController.endPan(snap: true) }
+        case "swipe-follow-scale":
+            guard let scale = Double(value), scale > 0 else { return "error: swipe-follow-scale <canvas widths per trackpad width>" }
+            config.swipeFollowScale = scale
         default:
             return "error: unknown setting '\(args[0])'"
         }
@@ -203,7 +211,7 @@ extension WindowManager {
             case "inspect":
                 return debugInspect(appFilter: args.dropFirst().first)
             case "settings":
-                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue) swipe-fingers=\(config.swipeFingers) swipe-edge-steps=\(config.swipeEdgeSteps)"
+                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue) swipe-fingers=\(config.swipeFingers) swipe-edge-steps=\(config.swipeEdgeSteps) swipe-mode=\(config.swipeMode.rawValue) swipe-follow-scale=\(config.swipeFollowScale)"
             case "touches":
                 let state = args.count == 2 ? args[1].lowercased() : ""
                 guard state == "on" || state == "off" else { return "error: usage: debug touches on|off" }
