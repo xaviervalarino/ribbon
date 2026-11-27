@@ -112,7 +112,7 @@ public struct Config: Sendable, Codable {
         swipeFirst: Double = 0.03,
         swipeStep: Double = 0.15,
         swipeReverse: Double = 0.04,
-        swipeMode: SwipeMode = .step,
+        swipeMode: SwipeMode = .follow,
         swipeFollowScale: Double = 1.5,
         swipeEdgeSteps: Int = 2,
         swipeLeftEdgeCommand: [String] = ["/Applications/InstantSpaceSwitcher.app/Contents/MacOS/ISSCli", "left"],
