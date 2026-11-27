@@ -13,7 +13,8 @@ A scrollable tiling window manager for macOS (niri/PaperWM style), built as a Sw
 
 ## Requirements
 
-- macOS with Accessibility permission enabled for `Ribbon.app`
+- macOS 26 (only tested on 26)
+- Accessibility permission enabled for `Ribbon.app`
 - InstantSpaceSwitcher (`ISSCli`), optional, for swipe-based Space switching
 
 ## Build and run
