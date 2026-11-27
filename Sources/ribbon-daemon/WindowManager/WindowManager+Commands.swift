@@ -131,9 +131,9 @@ extension WindowManager {
         return lines.isEmpty ? "no windows" + (appFilter.map { " for '\($0)'" } ?? "") : lines.joined(separator: "\n")
     }
 
-    /// Live-tunes slide settings for side-by-side comparison; a daemon restart resets them.
+    /// Live-tunes slide and swipe settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
-        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing <value>" }
+        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing|swipe-fingers <value>" }
         let value = args[1].lowercased()
         switch args[0].lowercased() {
         case "resize-mode":
@@ -145,6 +145,10 @@ extension WindowManager {
         case "focus-timing":
             guard let timing = FocusTiming(rawValue: value) else { return "error: focus-timing start|end" }
             config.focusTiming = timing
+        case "swipe-fingers":
+            guard let fingers = Int(value), fingers >= 0 else { return "error: swipe-fingers <count, 0 turns native swipe off>" }
+            config.swipeFingers = fingers
+            updateGestureTap()
         default:
             return "error: unknown setting '\(args[0])'"
         }
@@ -196,7 +200,7 @@ extension WindowManager {
             case "inspect":
                 return debugInspect(appFilter: args.dropFirst().first)
             case "settings":
-                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue)"
+                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue) swipe-fingers=\(config.swipeFingers)"
             case "touches":
                 let state = args.count == 2 ? args[1].lowercased() : ""
                 guard state == "on" || state == "off" else { return "error: usage: debug touches on|off" }

@@ -1,15 +1,10 @@
 import Foundation
 import CoreGraphics
 
-private let gestureEventType = CGEventType(rawValue: 29)!
-private let swipeEventType = CGEventType(rawValue: 31)!
-
 protocol InputTapDelegate: AnyObject {
     func mouseUp()
     /// Horizontal mouse or scroll travel.
     func pointerMoved(dx: Double)
-    func gesture(_ event: CGEvent)
-    func swipe(_ event: CGEvent)
     /// A key press while key monitoring is on; the key never reaches apps.
     func keyDown(keyCode: Int64)
 }
@@ -25,7 +20,6 @@ final class InputTap {
     private var tapPort: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var loggedUnavailable = false
-    private var gestureMonitoring = false
     private var pointerMonitoring = false
     /// While on, every key press is swallowed and goes to the delegate, and so is the release of
     /// each swallowed press.
@@ -49,9 +43,6 @@ final class InputTap {
         var list: [CGEventType] = [.leftMouseUp]
         if pointerMonitoring {
             list.append(contentsOf: [.mouseMoved, .scrollWheel])
-        }
-        if gestureMonitoring {
-            list.append(contentsOf: [gestureEventType, swipeEventType])
         }
         if keyMonitoring {
             list.append(contentsOf: [.keyDown, .keyUp])
@@ -84,12 +75,6 @@ final class InputTap {
         source.localEventsSuppressionInterval = 0
         CGWarpMouseCursorPosition(point)
         source.localEventsSuppressionInterval = defaultSuppressionInterval
-    }
-
-    func setGestureMonitoring(_ on: Bool) {
-        guard on != gestureMonitoring else { return }
-        gestureMonitoring = on
-        start()
     }
 
     func setKeyMonitoring(_ on: Bool) {
@@ -163,10 +148,6 @@ final class InputTap {
             delegate?.pointerMoved(dx: event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2))
             // A scroll that pans the strip must not also scroll or swipe-navigate the app under the cursor.
             return !pointerMonitoring
-        case gestureEventType:
-            delegate?.gesture(event)
-        case swipeEventType:
-            delegate?.swipe(event)
         case .keyDown:
             guard keyMonitoring else { return true }
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)

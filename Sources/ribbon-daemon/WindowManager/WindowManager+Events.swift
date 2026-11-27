@@ -477,6 +477,11 @@ extension WindowManager: InputTapDelegate {
         }
     }
 
+}
+
+// MARK: - Gestures
+
+extension WindowManager {
     func setTouchesProbe(_ on: Bool) {
         touchesProbe.bucketTimer?.cancel()
         touchesProbe.bucketTimer = nil
@@ -487,7 +492,7 @@ extension WindowManager: InputTapDelegate {
             if touchesProbe.isArmed {
                 flushTouchesProbeBucket()
                 touchesProbe = TouchesProbeState()
-                inputTap.setGestureMonitoring(false)
+                updateGestureTap()
                 RibbonLog.log("touches probe off", category: "input")
             }
             return
@@ -495,7 +500,7 @@ extension WindowManager: InputTapDelegate {
 
         flushTouchesProbeBucket()
         touchesProbe = TouchesProbeState(isArmed: true)
-        inputTap.setGestureMonitoring(true)
+        updateGestureTap()
 
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
@@ -526,20 +531,47 @@ extension WindowManager: InputTapDelegate {
         touchesProbe.swipeDX = 0
     }
 
+    /// The gesture tap runs while native swipe is on (`swipeFingers > 0`) or the touches probe is
+    /// armed. Each call recreates it, which also restores touch data after sleep.
+    func updateGestureTap() {
+        // A recreated tap may have missed the lift that ended the last gesture.
+        lastTouch = nil
+        swipeStepper = SwipeStepper()
+        if config.swipeFingers > 0 || touchesProbe.isArmed {
+            gestureTap.start()
+        } else {
+            gestureTap.stop()
+        }
+    }
+
     func gesture(_ event: CGEvent) {
-        guard touchesProbe.isArmed, let nsEvent = NSEvent(cgEvent: event) else { return }
+        guard let nsEvent = NSEvent(cgEvent: event) else { return }
+        // "indirect" touches are the trackpad's; "direct" ones are the Touch Bar's.
         let touches = nsEvent.touches(matching: .touching, in: nil).filter { $0.type == .indirect }
         let count = touches.count
-        let meanX: Double? = count > 0
-            ? touches.reduce(0.0) { $0 + Double($1.normalizedPosition.x) } / Double(count)
-            : nil
-        if count > 0, count == touchesProbe.lastTouchCount, let meanX, let prevX = touchesProbe.lastMeanX {
-            touchesProbe.dx += meanX - prevX
+        let sum = touches.reduce(CGPoint.zero) {
+            CGPoint(x: $0.x + $1.normalizedPosition.x, y: $0.y + $1.normalizedPosition.y)
         }
-        touchesProbe.lastTouchCount = count
-        touchesProbe.lastMeanX = meanX
-        touchesProbe.events += 1
-        touchesProbe.maxTouches = max(touchesProbe.maxTouches, count)
+        // Travel summed over fingers, measured only between events with the same finger count.
+        var travel = CGVector.zero
+        if count > 0, let last = lastTouch, last.count == count {
+            travel = CGVector(dx: sum.x - last.sum.x, dy: sum.y - last.sum.y)
+        }
+        lastTouch = count > 0 ? (count, sum) : nil
+
+        if touchesProbe.isArmed {
+            if count > 0 {
+                touchesProbe.dx += travel.dx / Double(count)
+            }
+            touchesProbe.events += 1
+            touchesProbe.maxTouches = max(touchesProbe.maxTouches, count)
+        }
+
+        guard config.swipeFingers > 0,
+              let step = swipeStepper.feed(fingers: count, dx: travel.dx, dy: travel.dy, config: config) else { return }
+        let command = step == .focusLeft ? "focus left" : "focus right"
+        RibbonLog.log("swipe step: \(command)", category: "input")
+        _ = handleCommand(command)
     }
 
     func swipe(_ event: CGEvent) {

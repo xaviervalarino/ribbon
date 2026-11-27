@@ -85,6 +85,7 @@ public final class WindowManager {
     public var config = Config.default
     let observer = AXEventObserver()
     let inputTap = InputTap()
+    let gestureTap = GestureTap()
     let socketServer = SocketServer()
     var trackedWindows: [CGWindowID: AXElement] = [:]
     var windowIDsByElement: [AXUIElement: CGWindowID] = [:]
@@ -104,8 +105,6 @@ public final class WindowManager {
         var isArmed = false
         var bucketTimer: DispatchSourceTimer?
         var endWork: DispatchWorkItem?
-        var lastTouchCount = 0
-        var lastMeanX: Double?
         var maxTouches = 0
         var events = 0
         var dx = 0.0
@@ -113,6 +112,9 @@ public final class WindowManager {
         var swipeDX = 0.0
     }
     var touchesProbe = TouchesProbeState()
+    var swipeStepper = SwipeStepper()
+    /// Trackpad finger count and summed normalized position at the last touch event with fingers down.
+    var lastTouch: (count: Int, sum: CGPoint)?
     var displaySamplingTimer: DispatchSourceTimer?
     var displaySamplingCount: Int = 0
 
@@ -258,6 +260,9 @@ public final class WindowManager {
         observer.start()
         inputTap.delegate = self
         inputTap.start()
+        gestureTap.onGesture = { [weak self] in self?.gesture($0) }
+        gestureTap.onSwipe = { [weak self] in self?.swipe($0) }
+        updateGestureTap()
 
         // Scan existing windows
         discoverExistingWindows()
@@ -291,8 +296,9 @@ public final class WindowManager {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            // Gesture events arrive with no touches after sleep until the tap is recreated.
             self.inputTap.start()
+            // Gesture events arrive with no touches after sleep until the tap is recreated.
+            self.updateGestureTap()
             self.displayConfigurationChanged()
         }
 
@@ -402,6 +408,7 @@ public final class WindowManager {
         }
         inputTap.unfreezePointer()
         inputTap.stop()
+        gestureTap.stop()
         if let obs = screensWakeObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
             screensWakeObserver = nil
