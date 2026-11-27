@@ -628,6 +628,36 @@ func runTests() {
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.90, dy: 0, config: config), .focusRight, "Fast flick fires one step")
     TestRunner.assertEqual(flickStepper.feed(fingers: 3, dx: -0.03, dy: 0, config: config), nil, "Excess travel past threshold is dropped")
 
+    // 18b. Strip edges and swipe edge pushes
+    let edgeColumns = [701, 702, 703].map { ColumnModel(windows: [WindowModel(id: CGWindowID($0), pid: 1, title: "W", appName: "A")]) }
+    TestRunner.assertTrue(Ribbon().isAtEdge(.left) && Ribbon().isAtEdge(.right), "An empty strip is at both edges")
+    TestRunner.assertTrue(Ribbon(columns: edgeColumns, activeColumnIndex: 0).isAtEdge(.left), "First column is at the left edge")
+    TestRunner.assertTrue(!Ribbon(columns: edgeColumns, activeColumnIndex: 0).isAtEdge(.right), "First of three is not at the right edge")
+    TestRunner.assertTrue(Ribbon(columns: edgeColumns, activeColumnIndex: 2).isAtEdge(.right), "Last column is at the right edge")
+    TestRunner.assertTrue(!Ribbon(columns: edgeColumns, activeColumnIndex: 1).isAtEdge(.left), "Middle column is at neither edge")
+    TestRunner.assertTrue(!Ribbon().isAtEdge(.up), "Vertical directions are never at an edge")
+
+    var edgeStepper = SwipeStepper()
+    TestRunner.assertEqual(edgeStepper.resolve(.focusRight, atEdge: false, config: config), .focus, "Away from the edge a step moves focus")
+    TestRunner.assertEqual(edgeStepper.resolve(.focusRight, atEdge: true, config: config), nil, "First push past the edge counts without firing")
+    TestRunner.assertEqual(edgeStepper.resolve(.focusRight, atEdge: true, config: config), .edge, "Second push in a row fires the edge action")
+    TestRunner.assertEqual(edgeStepper.feed(fingers: 3, dx: 0.9, dy: 0, config: config), nil, "After the edge action feed returns no steps")
+    _ = edgeStepper.feed(fingers: 0, dx: 0, dy: 0, config: config)
+    TestRunner.assertEqual(edgeStepper.feed(fingers: 3, dx: 0.09, dy: 0, config: config), .focusLeft, "Lifting the fingers re-arms stepping")
+
+    var pushStepper = SwipeStepper()
+    _ = pushStepper.resolve(.focusRight, atEdge: true, config: config)
+    TestRunner.assertEqual(pushStepper.resolve(.focusLeft, atEdge: true, config: config), nil, "A push the other way starts the count over")
+    _ = pushStepper.resolve(.focusRight, atEdge: true, config: config)
+    TestRunner.assertEqual(pushStepper.resolve(.focusLeft, atEdge: false, config: config), .focus, "Leaving the edge resets the count")
+    TestRunner.assertEqual(pushStepper.resolve(.focusRight, atEdge: true, config: config), nil, "Back at the edge the count starts at one")
+
+    var oneStepStepper = SwipeStepper()
+    TestRunner.assertEqual(oneStepStepper.resolve(.focusLeft, atEdge: true, config: Config(swipeEdgeSteps: 1)), .edge, "swipeEdgeSteps 1 fires on the first push")
+    var offStepper = SwipeStepper()
+    TestRunner.assertEqual(offStepper.resolve(.focusLeft, atEdge: true, config: Config(swipeEdgeSteps: 0)), nil, "swipeEdgeSteps 0 never fires")
+    TestRunner.assertEqual(offStepper.resolve(.focusLeft, atEdge: true, config: Config(swipeEdgeSteps: 0)), nil, "swipeEdgeSteps 0 never fires on later pushes")
+
     // 19. A released pan focuses a fully visible column so the strip stays put
     let panGeometry: [(x: Double, width: Double)] = [(x: 0, width: 750), (x: 760, width: 1200), (x: 1970, width: 1200)]
     TestRunner.assertEqual(LayoutEngine.panSnapColumn(geometry: panGeometry, offset: 0, canvasWidth: 1500, activeIndex: 1), 0,

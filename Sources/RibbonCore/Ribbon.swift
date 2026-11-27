@@ -43,6 +43,16 @@ public struct Ribbon: Sendable, Codable {
 
     // MARK: - Navigation
 
+    /// True when focus cannot move further left or right: the active column is the first or last,
+    /// or the strip is empty. Other directions are never at an edge.
+    public func isAtEdge(_ direction: FocusDirection) -> Bool {
+        switch direction {
+        case .left: return columns.isEmpty || activeColumnIndex <= 0
+        case .right: return columns.isEmpty || activeColumnIndex >= columns.count - 1
+        default: return false
+        }
+    }
+
     public mutating func focusLeft() {
         guard !columns.isEmpty else { return }
         activeColumnIndex = max(0, activeColumnIndex - 1)

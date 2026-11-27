@@ -133,7 +133,7 @@ extension WindowManager {
 
     /// Live-tunes slide and swipe settings for side-by-side comparison; a daemon restart resets them.
     private func applyDebugSetting(_ args: [String]) -> String {
-        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing|swipe-fingers <value>" }
+        guard args.count == 2 else { return "error: debug set resize-mode|slide-ms|focus-timing|swipe-fingers|swipe-edge-steps <value>" }
         let value = args[1].lowercased()
         switch args[0].lowercased() {
         case "resize-mode":
@@ -149,6 +149,9 @@ extension WindowManager {
             guard let fingers = Int(value), fingers >= 0 else { return "error: swipe-fingers <count, 0 turns native swipe off>" }
             config.swipeFingers = fingers
             updateGestureTap()
+        case "swipe-edge-steps":
+            guard let steps = Int(value), steps >= 0 else { return "error: swipe-edge-steps <count, 0 turns edge commands off>" }
+            config.swipeEdgeSteps = steps
         default:
             return "error: unknown setting '\(args[0])'"
         }
@@ -200,7 +203,7 @@ extension WindowManager {
             case "inspect":
                 return debugInspect(appFilter: args.dropFirst().first)
             case "settings":
-                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue) swipe-fingers=\(config.swipeFingers)"
+                return "resize-mode=\(config.resizeMode.rawValue) slide-ms=\(config.scrollAnimationMs) focus-timing=\(config.focusTiming.rawValue) swipe-fingers=\(config.swipeFingers) swipe-edge-steps=\(config.swipeEdgeSteps)"
             case "touches":
                 let state = args.count == 2 ? args[1].lowercased() : ""
                 guard state == "on" || state == "off" else { return "error: usage: debug touches on|off" }

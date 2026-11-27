@@ -91,9 +91,40 @@ extension WindowManager {
 
         guard config.swipeFingers > 0,
               let step = swipeStepper.feed(fingers: count, dx: travel.dx, dy: travel.dy, config: config) else { return }
-        let command = step == .focusLeft ? "focus left" : "focus right"
-        RibbonLog.log("swipe step: \(command)", category: "input")
-        _ = handleCommand(command)
+        // Overview, the screenshot grid and a caps pan move focus their own way; their edges run nothing.
+        let ribbon = ribbons[currentActiveSpaceID()] ?? Ribbon()
+        let atEdge = ribbon.isAtEdge(step.direction)
+            && !ribbon.isOverview && !screenshotGrid.isOpen && !panController.isPanning
+        switch swipeStepper.resolve(step, atEdge: atEdge, config: config) {
+        case .focus:
+            let command = step == .focusLeft ? "focus left" : "focus right"
+            RibbonLog.log("swipe step: \(command)", category: "input")
+            _ = handleCommand(command)
+        case .edge:
+            runEdgeCommand(step == .focusLeft ? config.swipeLeftEdgeCommand : config.swipeRightEdgeCommand)
+        case nil:
+            if atEdge && config.swipeEdgeSteps > 0 {
+                RibbonLog.log("swipe edge push: \(step.direction)", category: "input")
+            }
+        }
+    }
+
+    /// Runs a swipe edge command, program first, off the main thread.
+    private func runEdgeCommand(_ argv: [String]) {
+        guard let program = argv.first else { return }
+        RibbonLog.log("swipe edge command: \(argv.joined(separator: " "))", category: "input")
+        DispatchQueue.global(qos: .userInitiated).async {
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: program)
+            process.arguments = Array(argv.dropFirst())
+            process.standardOutput = FileHandle.nullDevice
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+            } catch {
+                RibbonLog.log("swipe edge command failed: \(error)", category: "input")
+            }
+        }
     }
 
     func swipe(_ event: CGEvent) {

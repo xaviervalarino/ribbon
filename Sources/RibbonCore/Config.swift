@@ -51,6 +51,12 @@ public struct Config: Sendable, Codable {
     public var swipeFirst: Double
     public var swipeStep: Double
     public var swipeReverse: Double
+    /// Swipe steps past the strip's edge, in a row in one gesture, that run the edge command; 0 turns
+    /// edge commands off.
+    public var swipeEdgeSteps: Int
+    /// Programs and arguments run when a swipe pushes past the strip's left or right edge.
+    public var swipeLeftEdgeCommand: [String]
+    public var swipeRightEdgeCommand: [String]
     /// A released pan centers the focused column when its center lies within this fraction of the
     /// canvas width from the canvas center; 0 leaves the strip where the pan put it.
     public var panCenterSnap: Double
@@ -97,6 +103,9 @@ public struct Config: Sendable, Codable {
         swipeFirst: Double = 0.03,
         swipeStep: Double = 0.15,
         swipeReverse: Double = 0.04,
+        swipeEdgeSteps: Int = 2,
+        swipeLeftEdgeCommand: [String] = ["/Applications/InstantSpaceSwitcher.app/Contents/MacOS/ISSCli", "left"],
+        swipeRightEdgeCommand: [String] = ["/Applications/InstantSpaceSwitcher.app/Contents/MacOS/ISSCli", "right"],
         panCenterSnap: Double = 0.15
     ) {
         self.windowGap = windowGap
@@ -118,6 +127,9 @@ public struct Config: Sendable, Codable {
         self.swipeFirst = swipeFirst
         self.swipeStep = swipeStep
         self.swipeReverse = swipeReverse
+        self.swipeEdgeSteps = swipeEdgeSteps
+        self.swipeLeftEdgeCommand = swipeLeftEdgeCommand
+        self.swipeRightEdgeCommand = swipeRightEdgeCommand
         self.panCenterSnap = panCenterSnap
     }
 
