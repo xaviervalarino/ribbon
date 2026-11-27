@@ -1,46 +1,39 @@
-# Ribbon 🎀
+# ribbon
 
-A lightweight, native Swift scrollable tiling window manager daemon and CLI for macOS, inspired by Niri and PaperWM with an AeroSpace-style socket architecture.
+A scrollable tiling window manager for macOS (niri/PaperWM style), built as a Swift daemon with a `ribbon` CLI.
 
-## Key Features
+## Features
 
-- **Infinite Horizontal Strip:** Windows tile as columns along an infinite horizontal ribbon that slides the active column into the viewport.
-- **Zero Display Bleed:** Off-screen columns are hidden rather than placed in coordinate space, completely preventing windows from bleeding into neighboring displays.
-- **Sub-Millisecond CLI:** Fast Unix domain socket IPC (`/tmp/ribbon.sock`) allows instant command execution from Karabiner, skhd, or any shell.
-- **No SIP Required:** Uses public macOS Accessibility APIs.
+- 1D column strip with minimal scrolling to keep the focused column in view
+- Keyboard control through the `ribbon` CLI over a Unix domain socket
+- Three-finger trackpad scrubbing that glides and snaps to a column
+- Optional Space switching when swiping past the strip's end via InstantSpaceSwitcher (`ISSCli`)
+- Screenshot overview grid for picking a window
+- Multi-display support
 
-## Building
+## Requirements
 
-Requires macOS 13+ and Swift 5.9+.
+- macOS with Accessibility permission enabled for `Ribbon.app`
+- InstantSpaceSwitcher (`ISSCli`), optional, for swipe-based Space switching
 
-```bash
-swift build -c release
+## Build and run
+
+- `make`: build the CLI, daemon, and `Ribbon.app` bundle
+- `make start`: build and start the daemon
+- `make restart`: rebuild and restart the daemon
+- `make test`: run `RibbonCore` tests
+
+## Usage
+
+```
+ribbon focus <left|right|up|down|first|last>
+ribbon swap <left|right|up|down|first|last> (alias: move)
+ribbon cycle-width (alias: cycle)
+ribbon overview (alias: toggle-overview)
+ribbon focus-display [next|prev|<index>]
+ribbon status
 ```
 
-Binaries will be located at:
-- `.build/release/ribbon-daemon` (The background window management engine)
-- `.build/release/ribbon` (The client CLI)
+## Status
 
-## Running
-
-1. Start the daemon (requires Accessibility permissions on first run):
-   ```bash
-   .build/release/ribbon-daemon
-   ```
-2. Control windows via the CLI:
-   ```bash
-   ribbon focus left
-   ribbon focus right
-   ribbon swap left
-   ribbon swap right
-   ribbon cycle-width
-   ribbon slurp
-   ribbon barf
-   ```
-
-## Architecture
-
-- **`RibbonCore`**: Pure Swift data models (`Ribbon`, `ColumnModel`, `WindowModel`, `LayoutEngine`, `Config`).
-- **`RibbonAccessibility`**: Fast `AXUIElement` attribute manipulation and `AXObserver` window event monitoring.
-- **`ribbon-daemon`**: Central controller, window tracker, and Unix socket server.
-- **`ribbon-cli`**: Sub-millisecond client that connects to the socket and exits.
+Personal project, work in progress.
