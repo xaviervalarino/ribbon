@@ -61,7 +61,7 @@ public struct Config: Sendable, Codable {
     /// Canvas widths a scrub moves the strip per full trackpad width of finger travel.
     public var swipeFollowScale: Double
     /// Swipe steps past the strip's edge, in a row in one gesture, that run the edge command; 0 turns
-    /// edge commands off.
+    /// edge commands off in both swipe modes.
     public var swipeEdgeSteps: Int
     /// Programs and arguments run when a swipe pushes past the strip's left or right edge.
     public var swipeLeftEdgeCommand: [String]

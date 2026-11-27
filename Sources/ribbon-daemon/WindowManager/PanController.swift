@@ -13,6 +13,8 @@ final class PanController {
     /// Holds expire 10s after `pan begin`, or 10s after a pan's last motion, so a lost `pan end`
     /// cannot leave pointer motion panning.
     private static let holdTimeoutNs: UInt64 = 10_000_000_000
+    /// Canvas widths a lifting scrub must push past the strip's end to run that edge's command.
+    private static let edgeOvershoot = 0.5
 
     private weak var windowManager: WindowManager?
     /// The Space being panned; retile keeps its offset where the pan put it.
@@ -26,9 +28,14 @@ final class PanController {
     private var needsFlush = false
     private var flushCount = 0
     private var flushTimer: DispatchSourceTimer?
-    /// Tracks a trackpad scrub from its first motion until the pan ends; nil for a caps hold.
+    /// Tracks a trackpad scrub from its first motion until it ends, on an empty Space too, where no
+    /// pan runs; nil for a caps hold.
     private var scrubTracker: SwipeTracker?
     var isScrubbing: Bool { scrubTracker != nil }
+    /// Scrub travel the strip's ends clamped away since the last inward motion; positive past the
+    /// right end.
+    private var scrubOverscroll = 0.0
+    private var lastScrubDX = 0.0
 
     init(windowManager: WindowManager) {
         self.windowManager = windowManager
@@ -80,23 +87,55 @@ final class PanController {
         guard heldSince == nil, let wm = windowManager,
               let canvasWidth = wm.canvasWidth(forSpace: panningSpaceID ?? wm.currentActiveSpaceID()) else { return }
         let dx = fraction * wm.config.swipeFollowScale * canvasWidth
-        applyPan(dx: dx)
-        guard isPanning else { return }
+        // A scrub on an empty Space runs no pan to expire it, so a lost lift leaves its state behind.
+        if isScrubbing, !isPanning, DispatchTime.now().uptimeNanoseconds - lastMotionTime.uptimeNanoseconds >= Self.holdTimeoutNs {
+            scrubTracker = nil
+            scrubOverscroll = 0
+        }
+        // An empty Space has no strip to move: all of its travel pushes past an edge.
+        let overflow = applyPan(dx: dx) ?? -dx
+        scrubOverscroll = overflow * scrubOverscroll > 0 ? scrubOverscroll + overflow : overflow
+        lastScrubDX = dx
         lastMotionTime = .now()
         if scrubTracker == nil { scrubTracker = SwipeTracker() }
         scrubTracker?.push(delta: dx, time: time)
     }
 
-    /// Ends a scrub when its fingers lift at `time`, with its glide and column snap.
-    func liftScrub(time: Double) {
-        guard isScrubbing else { return }
+    /// Ends a scrub when its fingers lift at `time`: the strip glides and snaps to a column. Returns
+    /// the edge whose command should run when the scrub pushed far enough past it. Focus then stays
+    /// where it was, and the strip settles back on it: activating a window on this Space after the
+    /// Space switch would pull macOS back to it.
+    func liftScrub(time: Double) -> SwipeStepper.Step? {
+        guard isScrubbing, let wm = windowManager else { return nil }
         // A pause before the lift leaves no velocity: samples older than the history drop out.
         scrubTracker?.push(delta: 0, time: time)
-        endPan(snap: true)
+        let edge = scrubEdge(glide: scrubTracker?.glide ?? 0, wm: wm)
+        endPan(snap: true, focus: edge == nil)
+        return edge
     }
 
-    private func applyPan(dx: Double) {
-        guard let wm = windowManager else { return }
+    /// The edge a lifting scrub pushed `edgeOvershoot` canvas widths past, by its overscroll while
+    /// pinned or its glide past the end, whichever is larger, when its last motion was outward.
+    private func scrubEdge(glide: Double, wm: WindowManager) -> SwipeStepper.Step? {
+        let sID = panningSpaceID ?? wm.currentActiveSpaceID()
+        guard wm.config.swipeEdgeSteps > 0, let canvasWidth = wm.canvasWidth(forSpace: sID) else { return nil }
+        let ribbon = wm.ribbons[sID] ?? Ribbon()
+        let stripEnd = LayoutEngine.columnGeometry(for: ribbon, canvasWidth: canvasWidth, config: wm.config)
+            .last.map { $0.x + $0.width } ?? 0
+        let maxOffset = max(0, stripEnd - canvasWidth)
+        let projected = ribbon.viewportOffset - glide
+        let glidePast = projected > maxOffset ? projected - maxOffset : min(0, projected)
+        let overshoot = abs(glidePast) > abs(scrubOverscroll) ? glidePast : scrubOverscroll
+        // Past the right end (positive) the fingers moved left (negative dx).
+        guard abs(overshoot) >= Self.edgeOvershoot * canvasWidth, overshoot * lastScrubDX < 0 else { return nil }
+        return overshoot > 0 ? .focusRight : .focusLeft
+    }
+
+    /// Moves the strip by `dx`, starting a pan if none runs. Returns the part of the move the
+    /// strip's ends clamped away (positive past the right end), or nil when the Space has no strip.
+    @discardableResult
+    private func applyPan(dx: Double) -> Double? {
+        guard let wm = windowManager else { return nil }
         let sID = panningSpaceID ?? wm.currentActiveSpaceID()
         if !isPanning, let columns = wm.ribbons[sID]?.columns {
             // Cancelling replays deferred AX events, which edit the ribbon, so it runs before the
@@ -108,7 +147,7 @@ final class PanController {
             wm.scrollAnimator.cancel(windowIDs: spaceWindowIDs)
         }
         guard var r = wm.ribbons[sID], !r.columns.isEmpty,
-              let canvasWidth = wm.canvasWidth(forSpace: sID) else { return }
+              let canvasWidth = wm.canvasWidth(forSpace: sID) else { return nil }
 
         if !isPanning {
             panningSpaceID = sID
@@ -121,14 +160,19 @@ final class PanController {
         let geometry = LayoutEngine.columnGeometry(for: r, canvasWidth: canvasWidth, config: wm.config)
         let stripWidth = geometry.last.map { $0.x + $0.width } ?? 0
         let maxOffset = max(0, stripWidth - canvasWidth)
-        r.viewportOffset = max(0, min(r.viewportOffset - dx, maxOffset))
+        let target = r.viewportOffset - dx
+        r.viewportOffset = max(0, min(target, maxOffset))
         wm.ribbons[sID] = r
         needsFlush = true
+        return target - r.viewportOffset
     }
 
-    func endPan(snap: Bool) {
+    /// Ends any pan. `snap` settles the strip on a column, which takes focus unless `focus` is false.
+    func endPan(snap: Bool, focus: Bool = true) {
         let scrub = scrubTracker
         scrubTracker = nil
+        scrubOverscroll = 0
+        lastScrubDX = 0
         // A scrub ended by anything but its lift (a command, a click, a Space change, caps) ignores
         // the rest of its gesture.
         if scrub != nil && !snap { windowManager?.swipeStepper.cancel() }
@@ -159,7 +203,7 @@ final class PanController {
                 snapColumn = LayoutEngine.panSnapColumn(geometry: geometry, offset: r.viewportOffset,
                                                         canvasWidth: canvasWidth, activeIndex: r.activeColumnIndex)
             }
-            if let snapColumn, let winID = r.columns[snapColumn].activeWindow?.id, winID != r.activeWindow?.id {
+            if focus, let snapColumn, let winID = r.columns[snapColumn].activeWindow?.id, winID != r.activeWindow?.id {
                 r.focus(windowID: winID)
                 targetWindowID = winID
             }

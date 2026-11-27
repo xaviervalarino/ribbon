@@ -106,7 +106,7 @@ extension WindowManager {
             RibbonLog.log("swipe step: \(command)", category: "input")
             _ = handleCommand(command)
         case .edge:
-            runEdgeCommand(step == .focusLeft ? config.swipeLeftEdgeCommand : config.swipeRightEdgeCommand)
+            runEdgeCommand(step)
         case nil:
             if atEdge && config.swipeEdgeSteps > 0 {
                 RibbonLog.log("swipe edge push: \(step.direction)", category: "input")
@@ -120,14 +120,17 @@ extension WindowManager {
             guard !screenshotGrid.isOpen else { return }
             panController.scrub(fraction: fraction, time: time)
         case .end:
-            panController.liftScrub(time: time)
+            if let edge = panController.liftScrub(time: time) {
+                runEdgeCommand(edge)
+            }
         case nil:
             break
         }
     }
 
-    /// Runs a swipe edge command, program first, off the main thread.
-    private func runEdgeCommand(_ argv: [String]) {
+    /// Runs the command for the edge a swipe pushed past, program first, off the main thread.
+    private func runEdgeCommand(_ edge: SwipeStepper.Step) {
+        let argv = edge == .focusLeft ? config.swipeLeftEdgeCommand : config.swipeRightEdgeCommand
         guard let program = argv.first else { return }
         RibbonLog.log("swipe edge command: \(argv.joined(separator: " "))", category: "input")
         DispatchQueue.global(qos: .userInitiated).async {
